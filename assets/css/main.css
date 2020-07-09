@@ -25,7 +25,7 @@ canvas{
 
 
 
-.modal {
+.chart-modal {
   display: none;
   position: fixed;
   z-index: 1;
@@ -38,7 +38,7 @@ canvas{
   background-color: rgba(0,0,0,0.4);
 }
 
-.modal-content {
+.chart-modal-content {
   background-color: #fefefe;
   margin: 15% auto;
   padding: 20px;
