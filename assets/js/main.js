@@ -8,6 +8,7 @@ function plot(chartData, name, isDetailed) {
                       .map(name => name.replace(/Name$/, ""));
   var chartName = `chart_${name}`;
   var chart = window[chartName];
+  var locale = chartData.locale;
   if (chart === undefined || true) {
     var config = {
       type: 'line',
@@ -30,6 +31,12 @@ function plot(chartData, name, isDetailed) {
         tooltips: {
           mode: 'index',
           intersect: false,
+          itemSort: (a, b, data) => b.value - a.value,
+          callbacks: {
+              label: function(tooltipItem, data) {
+                  return `${data.datasets[tooltipItem.datasetIndex].label}: ${data.datasets[tooltipItem.datasetIndex].data[tooltipItem.index].toLocaleString(locale, { minimumFractionDigits: 2 })}`;
+              }
+          }
         },
         hover: {
           mode: 'nearest',
@@ -51,6 +58,41 @@ function plot(chartData, name, isDetailed) {
               labelString: translations[name]
             }
           }]
+        },
+        plugins: {
+        	zoom: {
+        		pan: {
+        			enabled: true,
+        			mode: 'xy',
+        			rangeMin: {
+        				x: null,
+        				y: null
+        			},
+        			rangeMax: {
+        				x: null,
+        				y: null
+        			},
+        			speed: 20,
+        			threshold: 10
+        		},
+
+        		zoom: {
+        			enabled: true,
+        			drag: false,
+        			mode: 'xy',
+        			rangeMin: {
+        				x: null,
+        				y: null
+        			},
+        			rangeMax: {
+        				x: null,
+        				y: null
+        			},
+        			speed: 0.1,
+        			threshold: 2,
+        			sensitivity: 3
+        		}
+        	}
         }
       }
     };
@@ -68,7 +110,8 @@ function datasets(dataToRender, xLabels, xLabel, yLabel) {
     var dataValue = chartData[`${source}Data`];
     var color = chartData[`${source}Color`]
 
-    return buildDataset(dataName, normalize(dataValue, xLabels, xLabel, yLabel), color);
+    var isMainDataset = idx == 0;
+    return buildDataset(dataName, normalize(dataValue, xLabels, xLabel, yLabel), color, isMainDataset);
   });
 }
 
@@ -97,11 +140,13 @@ function color(index) {
   return window.chartColors[colorName];
 }
 
-function buildDataset(label, data, color) {
+function buildDataset(label, data, color, isMainDataset) {
   return {  label: label,
             backgroundColor: color,
             borderColor: color,
             data: data,
+            pointRadius: 1.5 + (isMainDataset ? 0.5 : 0),
+            borderWidth: 1 + (isMainDataset ? 0.5 : 0),
             fill: false
             };
 }
@@ -115,8 +160,19 @@ function normalize(data, xLabels, xLabel, yLabel) {
 }
 
 function createChart(chartName, isDetailed, config) {
-  var canvas = document.createElement('canvas');
-  canvas.id = 'canvas_${name}_${isDetailed}';
+  var canvas_id = `canvas_${chartName}_${isDetailed ? 'detailed' : 'mini'}`;
+  var chart_id = `chart_${chartName}_${isDetailed ? 'detailed' : 'mini'}`;
+
+  var canvas = window[canvas_id];
+  if (canvas == null) {
+    var canvas = document.createElement('canvas');
+    canvas.id = canvas_id;
+    window[canvas_id] = canvas;
+    console.log(`Create chart ${chart_id}`);
+    window[chart_id] = new Chart(canvas.getContext('2d'), config);
+    canvas.chart = window[chart_id];
+  }
+
 
   var div = document.createElement('div');
   div.classList.add(isDetailed ? "detailed-chart-container" : "chart-container");
@@ -125,7 +181,19 @@ function createChart(chartName, isDetailed, config) {
   var parent = isDetailed ? document.getElementById('chart-modal-container') : document.getElementById('container');
   parent.appendChild(div);
 
-  window[chartName] = new Chart(canvas.getContext('2d'), config);
+  var theChart = window[chart_id];
+  document.getElementById('resetZoom').onclick = function(e) {theChart.resetZoom();};
+
+  function zoomOut(ev) {
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    ev.preventDefault();
+    ev.target.chart.resetZoom();
+
+    return false;
+  }
+
+  canvas.addEventListener('contextmenu', zoomOut, false);
 }
 
 window.addEventListener("load", function() {
@@ -161,8 +229,12 @@ function drawMap(sourceLatitude, sourceLongitude) {
   //map.setMaxBounds(map.getBounds());
   map.setMaxBounds([ [-90, -180],[90, 180] ]);
 
+  map.panTo(new L.LatLng(sourceLatitude, sourceLongitude));
+
   //
   var lastLatLon = null;
+    map.on('contextmenu', function(e) { map.setView([sourceLatitude, sourceLongitude], 2); });
+
     map.on('click', function(e){
       lastLatLon = e.latlng;
       if (compared.length >= 9) {
@@ -180,7 +252,7 @@ function drawMap(sourceLatitude, sourceLongitude) {
       $.ajax({ url:`/query?lat=${lastLatLon.lat}&lon=${lastLatLon.lng}&source=${originName}`,
           success: function(data) {
           if (compared.includes(data.country)) {
-            alert(`You already have ${data.country} in your list`);
+            removeArc(data.country);
             return;
           }
           if (data != null && data.country != null) {
@@ -194,7 +266,7 @@ function drawMap(sourceLatitude, sourceLongitude) {
 
             var myIcon = L.icon({
                 iconUrl: `https://static.safetravelcorridor.com/assets/icons/${icon}.png`,
-                iconSize: [32, 32]
+                iconSize: [16, 16]
             });
 
             var marker = L.marker([lastLatLon.lat, lastLatLon.lng], {title: country, icon: myIcon, riseOnHover: true})

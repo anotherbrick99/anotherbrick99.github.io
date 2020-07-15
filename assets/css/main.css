@@ -59,3 +59,12 @@ canvas{
   text-decoration: none;
   cursor: pointer;
 }
+
+.dataTables_wrapper {
+    font-family: tahoma;
+    font-size: 12px;
+    position: relative;
+    clear: both;
+    *zoom: 1;
+    zoom: 1;
+}
