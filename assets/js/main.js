@@ -23,6 +23,7 @@ function plot(chartData, name, isDetailed) {
 
           plot(chartData, name, true);
           document.getElementById("chartModal").style.display = "block";
+          document.getElementById("chartModal").focus();
         },
         title: {
           display: true,
@@ -34,7 +35,7 @@ function plot(chartData, name, isDetailed) {
           itemSort: (a, b, data) => b.value - a.value,
           callbacks: {
               label: function(tooltipItem, data) {
-                  return `${data.datasets[tooltipItem.datasetIndex].label}: ${data.datasets[tooltipItem.datasetIndex].data[tooltipItem.index].toLocaleString(locale, { minimumFractionDigits: 2 })}`;
+                  return `${data.datasets[tooltipItem.datasetIndex].label}: ${data.datasets[tooltipItem.datasetIndex].data[tooltipItem.index].toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
               }
           }
         },
@@ -98,9 +99,6 @@ function plot(chartData, name, isDetailed) {
     };
 
     createChart(chartName, isDetailed, config);
-  } else {
-    //config.data.datasets.push(buildDataset(destinationName, normalize(destinationData, xLabels, xLabel, yLabel), window.chartColors.blue));
-    //chart.update();
   }
 }
 
@@ -181,6 +179,10 @@ function createChart(chartName, isDetailed, config) {
   var parent = isDetailed ? document.getElementById('chart-modal-container') : document.getElementById('container');
   parent.appendChild(div);
 
+  if (isDetailed) {
+    document.getElementById("chartModal").focus();
+  }
+
   var theChart = window[chart_id];
   document.getElementById('resetZoom').onclick = function(e) {theChart.resetZoom();};
 
@@ -201,17 +203,28 @@ window.addEventListener("load", function() {
 
   var closeButton = document.getElementsByClassName("close")[0];
 
-  closeButton.onclick = function() {
+  function closeModal() {
     modal.style.display = "none";
+    var parent = document.getElementById("chart-modal-container");
+    while (parent.firstChild) {
+      parent.firstChild.remove();
+    }
+  }
+
+  modal.addEventListener("keyup", function(event) {
+    if(event.key === "Escape") {
+      closeModal();
+    }
+  });
+
+
+  closeButton.onclick = function() {
+    closeModal();
   }
 
   window.onclick = function(event) {
     if (event.target == modal) {
-      modal.style.display = "none";
-      var parent = document.getElementById("chart-modal-container");
-      while (parent.firstChild) {
-        parent.firstChild.remove();
-      }
+      closeModal();
     }
   }
 });
