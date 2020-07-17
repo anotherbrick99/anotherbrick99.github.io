@@ -1,4 +1,16 @@
-function plot(chartData, name, isDetailed) {
+function selectDatasets(datasetLabels) {
+  var charts = Object.keys(window)
+      .filter(key => key.startsWith("chart_"))
+      .map(key => window[key]);
+  charts.forEach(chart => filterDatasetsInChart(chart, datasetLabels));
+}
+
+function filterDatasetsInChart(chart, datasetLabels) {
+  var selectedDatasets = datasetLabels.map(label => chart.datasetsByLabel[label]);
+  chart.data.datasets = selectedDatasets;
+  chart.update();
+}
+function plot(chartData, name, datasetLabels, isDetailed) {
   var translations = chartData.translations;
   var xLabel = 'date';
   var yLabel = name;
@@ -6,22 +18,30 @@ function plot(chartData, name, isDetailed) {
   var dataToRender = Object.keys(chartData)
                       .filter(label => label.endsWith("Name"))
                       .map(name => name.replace(/Name$/, ""));
+
+  var allDatasets = datasets(dataToRender, xLabels, xLabel, yLabel);
+  var datasetsByLabel = allDatasets.reduce((acum, dataset) => {
+    acum[dataset.label] = dataset ;
+    return acum;
+    }, {});
+  var selectedDatasets = datasetLabels.map(label => datasetsByLabel[label]);
+  console.log(selectedDatasets)
   var chartName = `chart_${name}`;
-  var chart = window[chartName];
+  //var chart = window[chartName];
   var locale = chartData.locale;
-  if (chart === undefined || true) {
+  //if (chart === undefined || true) {
     var config = {
       type: 'line',
       data: {
         labels: xLabels,
-        datasets: datasets(dataToRender, xLabels, xLabel, yLabel)
+        datasets: selectedDatasets
       },
       options: {
         responsive: true,
         onClick: x => {
           if (isDetailed) return;
 
-          plot(chartData, name, true);
+          plot(chartData, name, datasetLabels, true);
           document.getElementById("chartModal").style.display = "block";
           document.getElementById("chartModal").focus();
         },
@@ -98,8 +118,9 @@ function plot(chartData, name, isDetailed) {
       }
     };
 
-    createChart(chartName, isDetailed, config);
-  }
+    var theChart = createChart(chartName, isDetailed, config);
+    theChart.datasetsByLabel = datasetsByLabel;
+  //}
 }
 
 function datasets(dataToRender, xLabels, xLabel, yLabel) {
@@ -158,8 +179,10 @@ function normalize(data, xLabels, xLabel, yLabel) {
 }
 
 function createChart(chartName, isDetailed, config) {
-  var canvas_id = `canvas_${chartName}_${isDetailed ? 'detailed' : 'mini'}`;
-  var chart_id = `chart_${chartName}_${isDetailed ? 'detailed' : 'mini'}`;
+  var chartType = isDetailed ? 'detailed' : 'mini';
+  var canvas_id = `canvas_${chartName}_${chartType}`;
+  var chart_id = `${chartName}_${chartType}`;
+
 
   var canvas = window[canvas_id];
   if (canvas == null) {
@@ -196,6 +219,7 @@ function createChart(chartName, isDetailed, config) {
   }
 
   canvas.addEventListener('contextmenu', zoomOut, false);
+  return theChart;
 }
 
 window.addEventListener("load", function() {
@@ -250,24 +274,25 @@ function drawMap(sourceLatitude, sourceLongitude) {
 
     map.on('click', function(e){
       lastLatLon = e.latlng;
-      if (compared.length >= 9) {
-        alert(`You are comparing ${compared.length} countries: ${compared.join(', ')}.\nPlease remove one before adding a new one.`);
-//        var buttons = compared.map(x => `<span> ${x}<span style="position: relative;top: 0;right: 0;" onclick="this.parentElement.remove();return false;">(x)</span></span>`).join("");
-//        L.popup()
-//              .setLatLng(lastLatLon)
-//              .setContent(`<p>Limit reached: remove some countries<br />
-//              Compare: <a href="/compare/${compared.map(x => encodeURIComponent(x)).join('/')}">${buttons}</a><br />
-//              </p>`)
-//              .openOn(map)
 
-        return;
-      }
       $.ajax({ url:`/query?lat=${lastLatLon.lat}&lon=${lastLatLon.lng}&source=${originName}`,
           success: function(data) {
           if (compared.includes(data.country)) {
             removeArc(data.country);
             return;
           }
+          if (compared.length >= 9) {
+                  alert(`You are comparing ${compared.length} countries: ${compared.join(', ')}.\nPlease remove one before adding a new one.`);
+          //        var buttons = compared.map(x => `<span> ${x}<span style="position: relative;top: 0;right: 0;" onclick="this.parentElement.remove();return false;">(x)</span></span>`).join("");
+          //        L.popup()
+          //              .setLatLng(lastLatLon)
+          //              .setContent(`<p>Limit reached: remove some countries<br />
+          //              Compare: <a href="/compare/${compared.map(x => encodeURIComponent(x)).join('/')}">${buttons}</a><br />
+          //              </p>`)
+          //              .openOn(map)
+
+                  return;
+                }
           if (data != null && data.country != null) {
             var orthodromic = data.ortho;
             var country = data.country;
