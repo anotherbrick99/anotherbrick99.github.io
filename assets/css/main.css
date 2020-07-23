@@ -68,3 +68,49 @@ canvas{
     *zoom: 1;
     zoom: 1;
 }
+
+
+//
+/* Style the list (remove margins and bullets, etc) */
+ul {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* Style the list items */
+ul li {
+  border: 1px solid #ddd;
+  margin-top: -1px; /* Prevent double borders */
+  background-color: #f6f6f6;
+  padding: 8px;
+  text-decoration: none;
+  font-size: 12px;
+  color: black;
+  display: inline-block;
+  position: relative;
+}
+
+ul li img {
+  position: static;
+  top: 15%;
+  right: 0%;
+  padding: 5px 5px;
+}
+
+/* Add a light grey background color on hover */
+ul li:hover {
+  background-color: #eee;
+}
+
+/* Style the close button (span) */
+.closeList {
+  cursor: pointer;
+  position: static;
+  top: 50%;
+  right: 0%;
+  padding: 3px 3px;
+  transform: translate(0%, -50%);
+}
+
+.closeList:hover {background: #bbb;}
