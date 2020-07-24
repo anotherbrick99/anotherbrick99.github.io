@@ -1,15 +1,40 @@
 console.logCopy = console.log.bind(console);
 
-console.log = function(data)
+console.log = function(...data)
 {
     var currentDate = moment().format("HH:mm:ss.SSS") + ': ';
-    this.logCopy(currentDate, data);
+    this.logCopy(currentDate, ...data);
 };
 
 function call_after_DOM_updated(fn) {
     intermediate = function () {window.requestAnimationFrame(fn)}
     window.requestAnimationFrame(intermediate)
 }
+//
+
+function notify(percentage, description) {
+  var pleaseWait = $('#pleaseWaitDialog');
+  var progressDescription = $('#progressDescription');
+  var progressBar = $('.progress-bar');
+  console.log(percentage, description)
+
+  progressBar.css('width', percentage+'%').attr('aria-valuenow', percentage);
+  progressBar.text(`${Math.trunc(percentage)}%`)
+  if (description != null) {
+    progressDescription.text(description)
+  }
+}
+
+function showPleaseWait(title) {
+    var pleaseWait = $('#pleaseWaitDialog');
+    $('#progressTitle').text(title);
+    pleaseWait.modal('show');
+};
+
+function hidePleaseWait() {
+    var pleaseWait = $('#pleaseWaitDialog');
+    pleaseWait.modal('hide');
+};
 //
 function changeLang(lang) {
     var newUrl;
@@ -33,35 +58,80 @@ function changeLang(lang) {
 //
 
 function getCharts() {
-  return Object.keys(window)
-          .filter(key => key.startsWith("chart_"))
-          .map(key => window[key]);
+  return Object.keys(chartsByName)
+          .map(key => chartsByName[key]);
 }
-function addChartDataset(country, dataPoints, color) {
-  getCharts().forEach(chart => {
+async function addChartDataset(country, dataPoints, color) {
+  getCharts().map(async chart => {
     var dataName = country;
     var isMainDataset = false;
     var xLabels= chart.xLabels;
     var xLabel = chart.xLabel;
     var yLabel = chart.yLabel;
-    var dataset = buildDataset(country, normalize(dataPoints, xLabels, xLabel, yLabel), color, isMainDataset);
+    var dataset = buildDataset(country, yLabel, normalize(dataPoints, xLabels, xLabel, yLabel), color, isMainDataset);
 
-    chart.datasetsByLabel[dataset.label] = dataset;
-    chart.data.datasets.push(dataset);
+    //await addDatasetToChart(chart, dataset);
   });
-
 }
 
-function chartShowDatasets(datasetLabels) {
-  getCharts().forEach(chart => filterDatasetsInChart(chart, datasetLabels));
+async function addDatasetToChart(chart, dataset) {
+  console.log(`Chart ${chart.yLabel} adding source ${dataset.label}...`);
+  let oldLen = chart.data.datasets.length;
+  chart.data.datasets[oldLen] = dataset;
+  chart.data.datasets.length = oldLen + 1;
+  chart.update();
+  console.log(`Chart ${chart.yLabel} added source ${dataset.label}`);
 }
 
-function filterDatasetsInChart(chart, datasetLabels) {
-  var currentDatasets = chart.data.datasets.map(dataset => dataset.label);
-  if (JSON.stringify(currentDatasets.toArray().sort()) == JSON.stringify(datasetLabels.toArray().sort())) return;
+var updating = false;
+async function chartShowDatasets(datasetLabels) {
+  if (updating) {
+    console.log("already updating");
+    return;
+  }
+  updating = true;
+  var charts = getCharts();//.forEach(chart => { await filterDatasetsInChart(chart, datasetLabels);});
+  showPleaseWait("Updating charts...");
+  notify(0, "Updating charts");
+  charts.map(async (chart, i) => setTimeout(async function() {
+      notify((i + 0.5)/charts.length * 100, `Loading ${chart.yLabel}...`);
+      await filterDatasetsInChart(chart, datasetLabels.map(label => `${label}_${chart.yLabel}`));
+      notify((i + 1)/charts.length * 100, `Loaded ${chart.yLabel}`);
+      if (i == charts.length -1) {
+        hidePleaseWait();
+        console.log("Updated charts")
+        updating = false;
+      }
+    }, 0));
+}
 
-  var selectedDatasets = datasetLabels.map(label => chart.datasetsByLabel[label]);
-  chart.data.datasets = selectedDatasets;
+function sameElements(arr1, arr2) {
+    if (arr1.length !== arr2.length) return false;
+    return arr1.every(x => arr2.includes(x));
+}
+
+async function filterDatasetsInChart(chart, datasetIds) {
+  var ids = chart.data.datasets.map(dataset => dataset.id);
+  var currentIds = ids.toArray();
+  var datasetIds = datasetIds.toArray();
+
+  if (sameElements(currentIds, datasetIds)) {
+    console.log(`  Chart ${chart.canvas.id}: No changes`);
+    return;
+  };
+  var currentDatasetNames = currentIds.map(id => datasetsById[id].label);
+  var newDatasetNames = datasetIds.map(id => datasetsById[id].label);
+  console.log(`  Current datasets: ${currentDatasetNames}(${currentDatasetNames.length})`);
+  console.log(`  New datasets: ${newDatasetNames}(${newDatasetNames.length})`);
+
+  var selectedDatasets = datasetIds.map(id => datasetsById[id]);
+  var oldLength = chart.data.datasets.length;
+  selectedDatasets.forEach((dataset, i) => chart.data.datasets[i] = dataset);
+  for (var i = selectedDatasets.length ; i < oldLength ; i++) {
+    delete chart.data.datasets[i];
+  }
+  chart.data.datasets.length = selectedDatasets.length;
+
   chart.update();
 }
 
@@ -76,13 +146,14 @@ async function plot(chartData, name, datasetLabels, isDetailed) {
                       .map(name => name.replace(/Name$/, ""));
 
   var allDatasets = datasets(dataToRender, xLabels, xLabel, yLabel);
-  var datasetsByLabel = allDatasets.reduce((acum, dataset) => {
-    acum[dataset.label] = dataset ;
-    return acum;
-    }, {});
-  var selectedDatasets = datasetLabels.map(label => datasetsByLabel[label]);
+  var selectedDatasets = datasetLabels.map(country => {
+    var datasetId = `${country}_${yLabel}`;
+    if (datasetsById[datasetId] == null)
+      throw new Error(`No dataset ${datasetId} available ${Object.keys(datasetsById)}`);
+    return datasetsById[datasetId];
+  });
   var chartName = `chart_${name}`;
-  //var chart = window[chartName];
+
   var locale = chartData.locale;
   //if (chart === undefined || true) {
     var config = {
@@ -107,7 +178,8 @@ async function plot(chartData, name, datasetLabels, isDetailed) {
         onClick: x => {
           if (isDetailed) return;
 
-          plot(chartData, name, datasetLabels, true);
+          var miniDatasets = chartsByName[`chart_${name}_mini`].config.data.datasets.map(x => x.label)
+          plot(chartData, name, miniDatasets, true);
           document.getElementById("chartModal").style.display = "block";
           document.getElementById("chartModal").focus();
         },
@@ -184,8 +256,7 @@ async function plot(chartData, name, datasetLabels, isDetailed) {
       }
     };
 
-    var theChart = createChart(chartName, isDetailed, config);
-    theChart.datasetsByLabel = datasetsByLabel;
+    var theChart = await createChart(chartName, isDetailed, config);
     theChart.xLabels = xLabels;
     theChart.xLabel = xLabel;
     theChart.yLabel = yLabel;
@@ -199,7 +270,7 @@ function datasets(dataToRender, xLabels, xLabel, yLabel) {
     var color = chartData[`${source}Color`]
 
     var isMainDataset = idx == 0;
-    return buildDataset(dataName, normalize(dataValue, xLabels, xLabel, yLabel), color, isMainDataset);
+    return buildDataset(dataName, yLabel, normalize(dataValue, xLabels, xLabel, yLabel), color, isMainDataset);
   });
 }
 
@@ -228,15 +299,24 @@ function color(index) {
   return window.chartColors[colorName];
 }
 
-function buildDataset(label, data, color, isMainDataset) {
-  return {  label: label,
+function buildDataset(country, yLabel, data, color, isMainDataset) {
+  let id = `${country}_${yLabel}`;
+  if (datasetsById[id] != null) {
+    console.log(`Build dataset ${id}, duplicated`)
+  } else {
+    //console.log(`Build dataset ${id}`)
+  }
+  let dataset = {  label: country,
             backgroundColor: color,
             borderColor: color,
             data: data,
             pointRadius: 1.5 + (isMainDataset ? 0.5 : 0),
             borderWidth: 1 + (isMainDataset ? 0.5 : 0),
-            fill: false
+            fill: false,
+            id: id
             };
+  datasetsById[id] = dataset;
+  return dataset;
 }
 
 function normalize(data, xLabels, xLabel, yLabel) {
@@ -247,20 +327,25 @@ function normalize(data, xLabels, xLabel, yLabel) {
   return xLabels.map(date => lineData[date.format("YYYY-MM-DD")] || null);
 }
 
-function createChart(chartName, isDetailed, config) {
+var chartsByName = {};
+var canvasByName = {};
+var datasetsById = {};
+async function createChart(chartName, isDetailed, config) {
   var chartType = isDetailed ? 'detailed' : 'mini';
   var canvas_id = `canvas_${chartName}_${chartType}`;
   var chart_id = `${chartName}_${chartType}`;
 
 
-  var canvas = window[canvas_id];
+  var canvas = canvasByName[canvas_id];
   if (canvas == null) {
     var canvas = document.createElement('canvas');
     canvas.id = canvas_id;
-    window[canvas_id] = canvas;
-    console.log(`Create chart ${chart_id}`);
-    window[chart_id] = new Chart(canvas.getContext('2d'), config);
-    canvas.chart = window[chart_id];
+    canvasByName[canvas_id] = canvas;
+    console.log(`Creating chart ${chart_id}: ${config.data.datasets.length}`);
+    chartsByName[chart_id] = new Chart(canvas.getContext('2d'), config);
+    window.requestAnimationFrame(() => console.log(`Created chart ${chart_id}: ${config.data.datasets.length}`));
+//    window.requestAnimationFrame(() => 1);
+    canvas.chart = chartsByName[chart_id];
   }
 
 
@@ -275,7 +360,7 @@ function createChart(chartName, isDetailed, config) {
     document.getElementById("chartModal").focus();
   }
 
-  var theChart = window[chart_id];
+  var theChart = chartsByName[chart_id];
   document.getElementById('resetZoom').onclick = function(e) {theChart.resetZoom();};
 
   function zoomOut(ev) {
@@ -322,14 +407,17 @@ window.addEventListener("load", function() {
   }
 });
 
+
+//
 var map = null;
-function drawMap(originName, originPoint) {
+async function drawMap(originName, originPoint, onClickHandler) {
   console.log("Rendering map");
   map = L.map('mapid').setView(originPoint, 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     continuousWorld: false,
     noWrap: true,
+    inertia: true,
     //bounds: [ [-90, -180],[90, 180] ]
   }).addTo(map);
   //map.setMaxBounds(map.getBounds());
@@ -341,12 +429,20 @@ function drawMap(originName, originPoint) {
   var lastLatLon = null;
   map.on('contextmenu', function(e) { map.setView(originPoint, 2); });
 
-  map.on('click', function(e) {
+  map.on('click', async function(e) {
     var clickedLatLon = e.latlng;
+    await onClickHandler(clickedLatLon);
+  });
+  //
 
-    var sourceOrigin = compared[0];
-    $.ajax({ url:`/query?lat0=${clickedLatLon.lat}&lon0=${clickedLatLon.lng}&source=${sourceOrigin}`,
-        success: function(theData) {
+  console.log("Rendered map");
+  return map;
+}
+
+async function countryArcOnClickHandler(clickedLatLon) {
+  var sourceOrigin = compared[0];
+  $.ajax({ url:`/query?lat0=${clickedLatLon.lat}&lon0=${clickedLatLon.lng}&source=${sourceOrigin}`,
+      success: async function(theData) {
         var data = theData[0];
         if (compared.includes(data.country)) {
           if (compared[0] != data.country) {
@@ -357,11 +453,7 @@ function drawMap(originName, originPoint) {
 
           return;
         }
-//        if (compared.length >= 9) {
-//          alert(`You are comparing ${compared.length} countries: ${compared.join(', ')}.\nPlease remove one before adding a new one.`);
-//
-//          return;
-//        }
+
         if (data != null && data.country != null) {
           var orthodromic = data.ortho;
           var country = data.country;
@@ -374,7 +466,7 @@ function drawMap(originName, originPoint) {
 
 
           var countryColor = color(compared.length);
-          addChartDataset(country, dataset, countryColor);
+          await addChartDataset(country, dataset, countryColor);
           var row = tableColumnNames.map(name => rowObject[name] || null);
           table.row.add(row).draw();
 
@@ -382,15 +474,10 @@ function drawMap(originName, originPoint) {
 
 
         } else {
-          console.error(`No country for lat=${clickedLatLon.lat}, lon=${clickedLatLon.lng}`);
+          console.warn(`No country for lat=${clickedLatLon.lat}, lon=${clickedLatLon.lng}`);
         }
       }
-    });
   });
-  //
-
-  console.log("Rendered map");
-  return map;
 }
 
 var arcs = {};
@@ -401,6 +488,10 @@ function drawOrtho(map, country, orthodromic, arcColor) {
   arcs[country] = L.geoJSON(orthodromic, { style: {color: arcColor} }).addTo(map);
 }
 
+function iconUrl(iconName) {
+  return `https://static.safetravelcorridor.com/assets/icons/${iconName}.png`;
+}
+
 var coords = {};
 function addArc(country, clickedLatLon, canonicalLatLon, orthodromic, iconName, color) {
   coords[country] = canonicalLatLon;
@@ -408,9 +499,8 @@ function addArc(country, clickedLatLon, canonicalLatLon, orthodromic, iconName, 
     drawOrtho(map, country, orthodromic, color);
   }
 
-  var iconUrl = `https://static.safetravelcorridor.com/assets/icons/${iconName}.png`;
   var myIcon = L.icon({
-      iconUrl: iconUrl,
+      iconUrl: iconUrl(iconName),
       iconSize: [16, 16]
   });
 
@@ -422,7 +512,36 @@ function addArc(country, clickedLatLon, canonicalLatLon, orthodromic, iconName, 
   compared.push(country);
   //attachPopup(marker, compared);
   //popup(country, compared, lastLatLon, map, data.country);
-  addArcButton(country, iconUrl);
+  addArcButton(country, iconUrl(iconName));
+}
+
+function countryPopupOnclickHandler(clickedLatLon) {
+  $.ajax({ url:`/query?lat0=${clickedLatLon.lat}&lon0=${clickedLatLon.lng}&source=europe`,
+      success: async function(theData) {
+        var data = theData[0];
+
+        if (data != null && data.country != null) {
+          var country = data.country;
+          var iconName = data.icon;
+          var canonicalCountryCoords =  L.latLng(data.latLon.lat, data.latLon.lon);
+          //var rowObject = data.row;
+          //var dataset = data.dataset;
+
+          var destinationIconUrl = iconUrl(iconName);//`https://static.safetravelcorridor.com/assets/icons/${iconName}.png`;;//markerIcon(destinationCountry);
+
+          var countryUrl = `/country/${encodeURIComponent(country)}`;
+          var content = `<h2><a href="${countryUrl}"><img width="32" height="32" src="${destinationIconUrl}"/>${country}</a></h2>
+                            <br />
+                            `;
+          L.popup()
+            .setLatLng(clickedLatLon)
+            .setContent(content)
+            .openOn(map);
+        } else {
+          console.warn(`No country for lat=${clickedLatLon.lat}, lon=${clickedLatLon.lng}`);
+        }
+      }
+  });
 }
 
 function attachPopup(target) {
@@ -615,11 +734,8 @@ function createTable(containerId, buttonGroups) {
     scrollCollapse: true,
     autoWidth:true,
     buttons: [
-        {
-          extend: 'colvisRestore',
-          text: 'all'
-        },
         'pageLength',
+
         ...buttonGroups],
 
     //buttons: [ 'pageLength', 'columnToggle', 'selectColumns' ],
@@ -639,41 +755,31 @@ function createTable(containerId, buttonGroups) {
       },
     ]
   });
-  table.on( 'length', function(event, settings, length) {
-    chartShowDatasets(tableCurrentPageLocalizableNames());
+  table.on( 'length.dt', async function(event, settings, length) {
+    console.log("table length");
+    await chartShowDatasets(tableCurrentPageLocalizableNames());
   });
-  table.on( 'order', function(event, settings, order) {
-    chartShowDatasets(tableCurrentPageLocalizableNames());
+  table.on( 'order.dt', async function(event, settings, order) {
+    console.log("table order");
+    await chartShowDatasets(tableCurrentPageLocalizableNames());
   });
-  table.on( 'search', function(event, settings) {
-    chartShowDatasets(tableCurrentPageLocalizableNames());
+  table.on( 'search.dt', async function(event, settings) {
+    console.log("table search");
+    await chartShowDatasets(tableCurrentPageLocalizableNames());
   });
-  table.on( 'page.dt', function(event, settings) {
-    chartShowDatasets(tableCurrentPageLocalizableNames());
-    return;
-    console.log('page.dt');
-    console.log(tableCurrentPageLocalizableNames());
-    return;
-    var pageSize = table.page.info().length;
-    var pageNumber = table.page.info().page;
-    var startIndex = table.page.info().start;
-    var endIndex = table.page.info().end;
-    var enabledDatasets = [];
-    //for (var i = pageNumber * pageSize ; i < pageNumber * pageSize + pageSize ; i++) {
-    for (var i = startIndex ; i < endIndex ; i++) {
-      enabledDatasets.push(i);
-    }
+  table.on( 'page.dt', async function(event, settings) {
+    console.log("table dt");
+    await chartShowDatasets(tableCurrentPageLocalizableNames());
+  });
 
-    Object.keys(window).filter(key => key.startsWith("chart_"))
-      .map(key => window[key])
-      .forEach(chart => {
-        //console.log(chart);
-        chartShowDatasets(chart, enabledDatasets);
-        //chart.data.datasets.forEach((dataset, i) => dataset.hidden = !enabledDatasets.includes(i));
-        //chart.update();
-      });
+  table.on( 'buttons-action.dt', function( e, buttonApi, dataTable, node, config ) {
+    if (!config.className.includes("colvisGroup")) {
+      return
+    }
+    dataTable.buttons("button.dt-button.buttons-colvisGroup").active(false)
+    buttonApi.active(true);
   });
-  console.log("Rendered table")
+  console.log("Rendered table");
 }
 
 function tableCurrentPageLocalizableNames() {
