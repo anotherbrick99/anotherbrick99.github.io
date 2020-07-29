@@ -18,22 +18,21 @@ function notify(percentage, description) {
   var progressBar = $('.progress-bar');
   console.log(percentage, description)
 
-  progressBar.css('width', percentage+'%').attr('aria-valuenow', percentage);
-  progressBar.text(`${Math.trunc(percentage)}%`)
-  if (description != null) {
-    progressDescription.text(description)
-  }
+    progressBar.css('width', percentage+'%').attr('aria-valuenow', percentage);
+    progressBar.text(`${Math.trunc(percentage)}%`)
+    if (description != null) {
+      progressDescription.text(description)
+    }
 }
 
 function showPleaseWait(title) {
-    var pleaseWait = $('#pleaseWaitDialog');
     $('#progressTitle').text(title);
-    pleaseWait.modal('show');
+    notify(0);
+    $('#cover').show();
 };
 
 function hidePleaseWait() {
-    var pleaseWait = $('#pleaseWaitDialog');
-    pleaseWait.modal('hide');
+    $("#cover").hide();
 };
 //
 function changeLang(lang) {
@@ -69,8 +68,6 @@ async function addChartDataset(country, dataPoints, color) {
     var xLabel = chart.xLabel;
     var yLabel = chart.yLabel;
     var dataset = buildDataset(country, yLabel, normalize(dataPoints, xLabels, xLabel, yLabel), color, isMainDataset);
-
-    //await addDatasetToChart(chart, dataset);
   });
 }
 
@@ -83,26 +80,44 @@ async function addDatasetToChart(chart, dataset) {
   console.log(`Chart ${chart.yLabel} added source ${dataset.label}`);
 }
 
-var updating = false;
-async function chartShowDatasets(datasetLabels) {
-  if (updating) {
-    console.log("already updating");
+var updateQueue = [];
+async function receiveDatasetsToShow(datasetLabels) {
+  updateQueue.push("");
+  if (updateQueue.length > 1) {
+    console.log(`Already updating, added update request. Queue size=${updateQueue.length}`);
     return;
   }
-  updating = true;
-  var charts = getCharts();//.forEach(chart => { await filterDatasetsInChart(chart, datasetLabels);});
-  showPleaseWait("Updating charts...");
-  notify(0, "Updating charts");
-  charts.map(async (chart, i) => setTimeout(async function() {
-      notify((i + 0.5)/charts.length * 100, `Loading ${chart.yLabel}...`);
-      await filterDatasetsInChart(chart, datasetLabels.map(label => `${label}_${chart.yLabel}`));
-      notify((i + 1)/charts.length * 100, `Loaded ${chart.yLabel}`);
-      if (i == charts.length -1) {
-        hidePleaseWait();
-        console.log("Updated charts")
-        updating = false;
+
+  window.requestAnimationFrame(() => showPleaseWait("Updating charts..."), 0);
+
+  var charts = getCharts();
+
+  for (let i = 0 ; i < charts.length ; i++) {
+    let chart = charts[i];
+
+    setTimeout(() => {
+      requestAnimationFrame( () => notify((i + 0.5)/charts.length * 100, `Loading ${chart.yLabel}...`))
+      filterDatasetsInChart(chart, datasetLabels.map(label => `${label}_${chart.yLabel}`));
+      requestAnimationFrame(() => notify((i + 1)/charts.length * 100, `Loaded ${chart.yLabel}`), 0)
+      if (updateQueue.length > 1) {
+        updateQueue.pop();
+        index = 0;
+        i = 0;
+        console.log("RESTART DETECTED");
+        //continue;
+      } else {
+        if (i == charts.length - 1) {
+              updateQueue.pop();
+              requestAnimationFrame(() => hidePleaseWait());
+              console.log("Updated charts");
+              //Race condition
+              if (updateQueue.length > 0) i = 0;
+            }
       }
-    }, 0));
+
+
+    }, 0);
+  }
 }
 
 function sameElements(arr1, arr2) {
@@ -110,7 +125,7 @@ function sameElements(arr1, arr2) {
     return arr1.every(x => arr2.includes(x));
 }
 
-async function filterDatasetsInChart(chart, datasetIds) {
+function filterDatasetsInChart(chart, datasetIds) {
   var ids = chart.data.datasets.map(dataset => dataset.id);
   var currentIds = ids.toArray();
   var datasetIds = datasetIds.toArray();
@@ -136,7 +151,7 @@ async function filterDatasetsInChart(chart, datasetIds) {
 }
 
 var xLabels = null;
-async function plot(chartData, name, datasetLabels, isDetailed) {
+function plot(chartData, name, datasetLabels, isDetailed) {
   var translations = chartData.translations;
   var xLabel = 'date';
   var yLabel = name;
@@ -155,7 +170,6 @@ async function plot(chartData, name, datasetLabels, isDetailed) {
   var chartName = `chart_${name}`;
 
   var locale = chartData.locale;
-  //if (chart === undefined || true) {
     var config = {
       type: 'line',
       //parsing: false,
@@ -256,7 +270,7 @@ async function plot(chartData, name, datasetLabels, isDetailed) {
       }
     };
 
-    var theChart = await createChart(chartName, isDetailed, config);
+    var theChart = createChart(chartName, isDetailed, config);
     theChart.xLabels = xLabels;
     theChart.xLabel = xLabel;
     theChart.yLabel = yLabel;
@@ -330,7 +344,7 @@ function normalize(data, xLabels, xLabel, yLabel) {
 var chartsByName = {};
 var canvasByName = {};
 var datasetsById = {};
-async function createChart(chartName, isDetailed, config) {
+function createChart(chartName, isDetailed, config) {
   var chartType = isDetailed ? 'detailed' : 'mini';
   var canvas_id = `canvas_${chartName}_${chartType}`;
   var chart_id = `${chartName}_${chartType}`;
@@ -464,6 +478,8 @@ async function countryArcOnClickHandler(clickedLatLon) {
           var tableIndexes = [...Array(table.columns().indexes().length).keys()];
           var tableColumnNames = tableIndexes.map(i => table.column(i).header().dataset.name);
 
+          chartData[country] = data.dataset;
+
 
           var countryColor = color(compared.length);
           await addChartDataset(country, dataset, countryColor);
@@ -471,8 +487,6 @@ async function countryArcOnClickHandler(clickedLatLon) {
           table.row.add(row).draw();
 
           addArc(country, clickedLatLon, canonicalCountryCoords, orthodromic, iconName, countryColor);
-
-
         } else {
           console.warn(`No country for lat=${clickedLatLon.lat}, lon=${clickedLatLon.lng}`);
         }
@@ -510,9 +524,44 @@ function addArc(country, clickedLatLon, canonicalLatLon, orthodromic, iconName, 
   markers[country] = marker;
 
   compared.push(country);
-  //attachPopup(marker, compared);
-  //popup(country, compared, lastLatLon, map, data.country);
   addArcButton(country, iconUrl(iconName));
+}
+
+function _popupid(country) {
+  let sanitized = country.replaceAll(/[^a-zA-Z]+/g, "_");
+  return `popupTable${sanitized}`;
+}
+
+function _renderMiniTable(...selectedSources) {
+
+  var lastPoints = selectedSources.map(name => chartData[name])
+                           .map(sourceAllPoints => sourceAllPoints.slice(-1)[0]);
+
+  var columnSelection = ['date', 'new_cases_per_million', 'new_deads_per_million', 'total_cases_per_million', 'total_deads_per_million'];
+  var f = x => (typeof x == 'number') ? x.toLocaleString(chartData.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : (x || "");
+  var data = columnSelection.map(column => [chartData.translations[column] || column, ...lastPoints.map(point => f(point[column]))])
+  var columns = selectedSources.map(name => ({title: `<img width="16px" style="float: right;" src="${markerIcon(name)}">`}));
+  columns.splice(0, 0, {});
+
+  let country = selectedSources[selectedSources.length - 1];
+  $(`#${_popupid(country)}`).DataTable( {
+    paging: false,
+    searching: false,
+    info: false,
+    ordering: false,
+    data: data,
+    columns: columns,
+    columnDefs: [
+          {
+              targets: [0],
+              className: 'dt-body-left'
+          },
+          {
+              targets: "_all",
+              className: 'dt-body-right'
+          },
+        ]
+  } );
 }
 
 function countryPopupOnclickHandler(clickedLatLon) {
@@ -524,19 +573,25 @@ function countryPopupOnclickHandler(clickedLatLon) {
           var country = data.country;
           var iconName = data.icon;
           var canonicalCountryCoords =  L.latLng(data.latLon.lat, data.latLon.lon);
-          //var rowObject = data.row;
-          //var dataset = data.dataset;
 
-          var destinationIconUrl = iconUrl(iconName);//`https://static.safetravelcorridor.com/assets/icons/${iconName}.png`;;//markerIcon(destinationCountry);
+          chartData[country] = data.dataset;
+
+          var destinationIconUrl = iconUrl(iconName);
+          markers[country] = {options: {icon: {options: {iconUrl: destinationIconUrl}}}};//fake marker for icon retrieval
 
           var countryUrl = `/country/${encodeURIComponent(country)}`;
-          var content = `<h2><a href="${countryUrl}"><img width="32" height="32" src="${destinationIconUrl}"/>${country}</a></h2>
-                            <br />
-                            `;
+          var content = singleCountryPopup(country);
+
+            //Remove previous table
+            $(`#${_popupid(country)}`).remove();
+
           L.popup()
             .setLatLng(clickedLatLon)
             .setContent(content)
             .openOn(map);
+
+
+          _renderMiniTable(country);
         } else {
           console.warn(`No country for lat=${clickedLatLon.lat}, lon=${clickedLatLon.lng}`);
         }
@@ -545,8 +600,17 @@ function countryPopupOnclickHandler(clickedLatLon) {
 }
 
 function attachPopup(target) {
+  var sourceCountry = compared[0];
+  var destinationCountry = target.options.title;
   target.unbindPopup();
-  target.bindPopup(popup(target.options.title)).openPopup()
+  target.bindPopup(popup(destinationCountry)).openPopup();
+
+  var selectedSources = [];
+  if (sourceCountry != destinationCountry) {
+    selectedSources.push(sourceCountry);
+  }
+  selectedSources.push(destinationCountry);
+  _renderMiniTable(...selectedSources);
 }
 
 function markerIcon(name) {
@@ -554,32 +618,36 @@ function markerIcon(name) {
 }
 
 function popup(destinationCountry) {
-  var content = null;
+  let content = null;
+  var sourceCountry = compared[0];
+
   if (compared.length > 1 && compared[0] != destinationCountry) {
-    var sourceCountry = compared[0];
-    var sourceIconUrl = markerIcon(sourceCountry);
-    var destinationIconUrl = markerIcon(destinationCountry);
-
-    var countryUrl = `/country/${encodeURIComponent(destinationCountry)}`;
-    var compareUrl = `/compare/${compared.map(x => encodeURIComponent(x)).join('/')}`;
+    //Country comparison
     var corridorUrl = `/corridor/${encodeURIComponent(sourceCountry)}/${encodeURIComponent(destinationCountry)}`;
-    var content = `<h2><a href="${sourceCountry}"><img width="32" height="32" src="${sourceIconUrl}"/>${sourceCountry}</a> => <a href="${countryUrl}"><img width="32" height="32" src="${destinationIconUrl}"/>${destinationCountry}</a></h2>
-                      <br />
-                      <button onclick="window.location.href='${corridorUrl}';">View safe corridor</button><br />
-                      </p>`;
+    content = `<div class="card">
+                 <h5 class="card-header">Travel corridor</h5>
+                 <div class="card-body">
+                   <h5 class="card-title">${sourceCountry}, ${destinationCountry}</h5>
+                   <p class="card-text"><table id="${_popupid(destinationCountry)}" class="display compact row-border" nostyle="font-size: 8px;padding: 5px;border-spacing: 0px;"></table></p>
+                   <a href="${corridorUrl}" class="btn btn-primary">View corridor</a>
+                 </div>
+               </div>`;
   } else {
-    var destinationIconUrl = markerIcon(destinationCountry);
-
-    var countryUrl = `/country/${encodeURIComponent(destinationCountry)}`;
-    var compareUrl = `/compare/${compared.map(x => encodeURIComponent(x)).join('/')}`;
-    var content = `<h2><a href="${countryUrl}"><img width="32" height="32" src="${destinationIconUrl}"/>${destinationCountry}</a></h2>
-                      <br />
-                      `;
+    content = singleCountryPopup(sourceCountry);
   }
 
-
-
   return content;
+}
+
+function singleCountryPopup(country) {
+  let countryUrl = `/country/${encodeURIComponent(country)}`;
+  return `<div class="card">
+                     <h5 class="card-header">${country}</h5>
+                     <div class="card-body">
+                       <p class="card-text"><table id="${_popupid(country)}" class="display compact row-border" nostyle="font-size: 8px;padding: 5px;border-spacing: 0px;"></table></p>
+                       <a href="${countryUrl}" class="btn btn-primary">View country info</a>
+                     </div>
+                   </div>`;
 }
 
 function compareAll() {
@@ -718,6 +786,12 @@ function createTable(containerId, buttonGroups) {
   console.log("Rendering table")
   table = jQuery(`#${containerId}`).DataTable({
     dom: 'Bfrtip',
+    fnDrawCallback: async function(settings) {
+      var isFirstDraw = table == null;
+      if (isFirstDraw) return;//Init
+
+      setTimeout(() => receiveDatasetsToShow(tableCurrentPageLocalizableNames()), 0);
+    },
     paging: true,
     pagingType: "full_numbers",
     colReorder: {
@@ -754,22 +828,6 @@ function createTable(containerId, buttonGroups) {
           className: 'dt-body-right'
       },
     ]
-  });
-  table.on( 'length.dt', async function(event, settings, length) {
-    console.log("table length");
-    await chartShowDatasets(tableCurrentPageLocalizableNames());
-  });
-  table.on( 'order.dt', async function(event, settings, order) {
-    console.log("table order");
-    await chartShowDatasets(tableCurrentPageLocalizableNames());
-  });
-  table.on( 'search.dt', async function(event, settings) {
-    console.log("table search");
-    await chartShowDatasets(tableCurrentPageLocalizableNames());
-  });
-  table.on( 'page.dt', async function(event, settings) {
-    console.log("table dt");
-    await chartShowDatasets(tableCurrentPageLocalizableNames());
   });
 
   table.on( 'buttons-action.dt', function( e, buttonApi, dataTable, node, config ) {
