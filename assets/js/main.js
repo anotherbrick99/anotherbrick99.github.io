@@ -656,10 +656,6 @@ function compareAll() {
     return;
   }
 
-  if (compared.length > 9) {
-    alert("Please select 9 countries at most or use continents");
-    return;
-  }
   var compareUrl = `/compare/${compared.map(x => encodeURIComponent(x)).join('/')}`;
   window.location.href=compareUrl;
 }
@@ -778,9 +774,7 @@ function addArcButton(destinationCountry, iconUrl) {
 
 //
 var table = null;
-function createTable(containerId, buttonGroups) {
-  var pageLength = 5;
-
+function createTable(containerId, buttonGroups, pageLength) {
   var pageLengths = [5, 10, 15, 20];
 
   console.log("Rendering table")
