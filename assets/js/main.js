@@ -507,7 +507,7 @@ function iconUrl(iconName) {
 }
 
 var coords = {};
-function addArc(country, clickedLatLon, canonicalLatLon, orthodromic, iconName, color) {
+function addArc(country, clickedLatLon, canonicalLatLon, orthodromic, iconName, color, closeableButtons=true, comparable=true) {
   coords[country] = canonicalLatLon;
   if (orthodromic != null) {
     drawOrtho(map, country, orthodromic, color);
@@ -523,8 +523,11 @@ function addArc(country, clickedLatLon, canonicalLatLon, orthodromic, iconName, 
     .addTo(map);
   markers[country] = marker;
 
-  compared.push(country);
-  addArcButton(country, iconUrl(iconName));
+  if (comparable) {
+    compared.push(country);
+  }
+
+  addArcButton(country, iconUrl(iconName), closeableButtons);
 }
 
 function _popupid(country) {
@@ -600,13 +603,13 @@ function countryPopupOnclickHandler(clickedLatLon) {
 }
 
 function attachPopup(target) {
-  var sourceCountry = compared[0];
   var destinationCountry = target.options.title;
   target.unbindPopup();
   target.bindPopup(popup(destinationCountry)).openPopup();
 
   var selectedSources = [];
-  if (sourceCountry != destinationCountry) {
+  if (compared.length > 0 && compared[0] != destinationCountry) {
+    var sourceCountry = compared[0];
     selectedSources.push(sourceCountry);
   }
   selectedSources.push(destinationCountry);
@@ -619,10 +622,10 @@ function markerIcon(name) {
 
 function popup(destinationCountry) {
   let content = null;
-  var sourceCountry = compared[0];
 
   if (compared.length > 1 && compared[0] != destinationCountry) {
     //Country comparison
+    var sourceCountry = compared[0];
     var corridorUrl = `/corridor/${encodeURIComponent(sourceCountry)}/${encodeURIComponent(destinationCountry)}`;
     content = `<div class="card">
                  <h5 class="card-header">Travel corridor</h5>
@@ -633,7 +636,7 @@ function popup(destinationCountry) {
                  </div>
                </div>`;
   } else {
-    content = singleCountryPopup(sourceCountry);
+    content = singleCountryPopup(destinationCountry);
   }
 
   return content;
@@ -744,7 +747,7 @@ function shiftBase() {
   console.log("Removed marker")
 }
 
-function addArcButton(destinationCountry, iconUrl) {
+function addArcButton(destinationCountry, iconUrl, closeable=true) {
   //FIXME render
   var li = document.createElement("li");
   var textNode = document.createElement("span")
@@ -763,7 +766,9 @@ function addArcButton(destinationCountry, iconUrl) {
   closeButton.classList.add("closeList");
   li.appendChild(img);
   li.appendChild(textNode);
-  li.appendChild(closeButton);
+  if (closeable) {
+    li.appendChild(closeButton);
+  }
   document.getElementById("sourceList").appendChild(li);
 
   closeButton.addEventListener("click", function() {
