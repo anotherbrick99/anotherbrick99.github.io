@@ -424,6 +424,7 @@ window.addEventListener("load", function() {
 
 //
 var map = null;
+var mapPopup = { closed: moment() };
 async function drawMap(originName, originPoint, onClickHandler) {
   console.log("Rendering map");
   map = L.map('mapid').setView(originPoint, 2);
@@ -439,15 +440,22 @@ async function drawMap(originName, originPoint, onClickHandler) {
 
   map.panTo(originPoint);
 
-  //
   var lastLatLon = null;
   map.on('contextmenu', function(e) { map.setView(originPoint, 2); });
 
   map.on('click', async function(e) {
+    //*1 hack
+    if (mapPopup.closed != null && moment() - mapPopup.closed < 50) {
+      return;
+    }
     var clickedLatLon = e.latlng;
     await onClickHandler(clickedLatLon);
   });
-  //
+
+  //FIXME: hack to cancel leaflet click bubling when closing popup
+  //view *1
+  //Leaflet does not allow to stop event propagation
+  map.on('popupclose', e => mapPopup.closed = moment());
 
   console.log("Rendered map");
   return map;
