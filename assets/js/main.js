@@ -1,7 +1,10 @@
+//Logger component
 console.logCopy = console.log.bind(console);
 
 console.log = function(...data)
 {
+    if (data instanceof Array && data.length > 0 && !data[0].startsWith("**")) return;
+    if (typeof data  === "string" && !data.startsWith("**")) return;
     var currentDate = moment().format("HH:mm:ss.SSS") + ': ';
     this.logCopy(currentDate, ...data);
 };
@@ -10,28 +13,26 @@ function call_after_DOM_updated(fn) {
     intermediate = function () {window.requestAnimationFrame(fn)}
     window.requestAnimationFrame(intermediate)
 }
-//
-
+//Progress component
 function notify(percentage, description) {
-  var pleaseWait = $('#pleaseWaitDialog');
   var progressDescription = $('#progressDescription');
   var progressBar = $('.progress-bar');
-  console.log(percentage, description)
+  var sanitizedPercentage = Math.trunc(percentage)
 
-    progressBar.css('width', percentage+'%').attr('aria-valuenow', percentage);
-    progressBar.text(`${Math.trunc(percentage)}%`)
-    if (description != null) {
-      progressDescription.text(description)
-    }
+  progressBar.css('width', sanitizedPercentage+'%').attr('aria-valuenow', sanitizedPercentage);
+  progressBar.text(`${sanitizedPercentage}%`)
+  if (description != null) {
+    progressDescription.text(description)
+  }
 }
 
-function showPleaseWait(title) {
+function showProgressBar(title) {
     $('#progressTitle').text(title);
-    notify(0);
+    notify(0, title);
     $('#cover').show();
 };
 
-function hidePleaseWait() {
+function hideProgressBar() {
     $("#cover").hide();
 };
 //
@@ -54,13 +55,12 @@ function changeLang(lang) {
 
     document.location.href = newUrl;
   }
-//
-
+//Chart dashboard component
 function getCharts() {
   return Object.keys(chartsByName)
           .map(key => chartsByName[key]);
 }
-async function addChartDataset(country, dataPoints, color) {
+function addChartDataset(country, dataPoints, color) {
   getCharts().map(async chart => {
     var dataName = country;
     var isMainDataset = false;
@@ -88,7 +88,7 @@ async function receiveDatasetsToShow(datasetLabels) {
     return;
   }
 
-  window.requestAnimationFrame(() => showPleaseWait("Updating charts..."), 0);
+  window.requestAnimationFrame(() => showProgressBar("Updating charts..."), 0);
 
   var charts = getCharts();
 
@@ -108,7 +108,7 @@ async function receiveDatasetsToShow(datasetLabels) {
       } else {
         if (i == charts.length - 1) {
               updateQueue.pop();
-              requestAnimationFrame(() => hidePleaseWait());
+              requestAnimationFrame(() => hideProgressBar());
               console.log("Updated charts");
               //Race condition
               if (updateQueue.length > 0) i = 0;
@@ -422,12 +422,91 @@ window.addEventListener("load", function() {
 });
 
 
-//
+//Map component
 var map = null;
 var mapPopup = { closed: moment() };
-async function drawMap(originName, originPoint, onClickHandler) {
+var compareButton = null;
+
+var undoButton = null;
+var redoButton = null;
+
+var undoStack = [];
+var redoStack = [];
+
+function _actionToString(action) {
+  return `${action.type} ${action.country} position=${action.position} arcs=${Object.keys(action.orthodromic)}`;
+}
+
+function _getCreateAction(country, clickedLatLon) {
+  let createAction = undoStack.find(action => action.type == 'add' && action.country == country && action.latLng.distanceTo(clickedLatLon) < 1) || redoStack.find(action => action.type == 'add' && action.country == country && action.latLng.distanceTo(clickedLatLon) < 1);
+  if (createAction == null) throw `No create action for ${country}, compared=${compared}`;
+
+  return createAction;
+}
+
+function _moveOtherCountriesToNewBase(newBase, newBaseOrthodromics) {
+  Object.keys(newBaseOrthodromics).forEach(country => {
+    if (!compared.includes(country)) throw `Unknown ortho ${country}, expected any of ${compared}`;
+  })
+  let currentBase = compared[0];
+  let currentBaseArcs = compared.slice(1);
+
+  let newBaseArcs = Object.keys(newBaseOrthodromics);
+  console.log("****", newBaseOrthodromics)
+  console.log(`*** _moveOtherCountriesToNewBase currentBase=${currentBase}, currentBasearcs=${currentBaseArcs}, newBase=${newBase}, newBaseArcs=${newBaseArcs}`)
+
+  let newBaseOrthos = newBaseArcs.map(x => newBaseOrthodromics[x]);
+
+  //Remove previous base arcs
+  for (let i = 0 ; i < currentBaseArcs.length ; i++) {
+    let destinationCountry = currentBaseArcs[i];
+    console.log(`**** Remove old base arc ${currentBase}->${destinationCountry}`)
+    removeOrtho(currentBase, destinationCountry);
+  }
+
+  //draw new base arcs
+  for (let i = 0 ; i < newBaseOrthos.length ; i++) {
+    let destinationCountry = newBaseOrthos[i].country;
+    let orthodromic = newBaseOrthos[i].ortho;
+
+    console.log(`***** Draw arc for new base ${newBase}->${destinationCountry}`)
+    drawOrtho(map, newBase, destinationCountry, orthodromic, color(i));
+  }
+}
+
+function notifyHistory(e, lambda) {
+  Sentry.withScope(function(scope) {
+    let theHistory = currentHistory();
+
+    scope.setExtra("history", theHistory);
+
+    let errorId = Sentry.captureException(e);
+
+    let data = {
+        errorId : errorId,
+
+        appCodeName: navigator.appCodeName,
+        appName: navigator.appName,
+        appVersion: navigator.appVersion,
+        product: navigator.product,
+        platform: navigator.platform,
+
+        jsonPayload: theHistory
+      };
+
+      jQuery.ajax({
+          method: "POST",
+          headers: {"X-XSRF-TOKEN": csrf_token()},
+          url: "/history",
+          data: JSON.stringify(data)
+      }).always(lambda);
+  });
+
+}
+
+async function drawMap(mapDivId, originName, originPoint, onClickHandler, comparable) {
   console.log("Rendering map");
-  map = L.map('mapid').setView(originPoint, 2);
+  map = L.map(mapDivId).setView(originPoint, 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     continuousWorld: false,
@@ -443,28 +522,364 @@ async function drawMap(originName, originPoint, onClickHandler) {
   var lastLatLon = null;
   map.on('contextmenu', function(e) { map.setView(originPoint, 2); });
 
+
+  //** HACK hack to cancel leaflet click bubling when closing popup
   map.on('click', async function(e) {
     //*1 hack
-    if (mapPopup.closed != null && moment() - mapPopup.closed < 50) {
+    let ignoreClick = mapPopup.closed != null && moment() - mapPopup.closed < 50;
+    if (ignoreClick) {
       return;
     }
+
     var clickedLatLon = e.latlng;
     await onClickHandler(clickedLatLon);
   });
 
-  //FIXME: hack to cancel leaflet click bubling when closing popup
+  //FIXME:
   //view *1
   //Leaflet does not allow to stop event propagation
   map.on('popupclose', e => mapPopup.closed = moment());
+  //** HACK hack to cancel leaflet click bubling when closing popup
+
+  L.easyButton("<span style=\"font-size: 2.5em;\">&target;</span>", function(btn, map) {
+    map.setView(originPoint, 2);
+  }, "Reset view").addTo(map);
+
+  if (comparable) {
+    function _redo(action) {
+      let country = action.args[0];
+      var undoable = false;
+      if (action.type == "add") {
+        if (compared.includes(country)) {
+          compareButtonStatusUpdate();
+          throw `Trying to add ${country} twice`;
+        }
+        let addArcMultiCreateArgs = action.args.slice();
+
+        addArcMultiCreateArgs[1] = undoable;
+        addArcMultiCreateArgs[9] = action.position;
+
+        addArcMulti(...addArcMultiCreateArgs);
+      } else if (action.type == "remove") {
+        if (!compared.includes(country)) {
+          compareButtonStatusUpdate();
+          throw `Trying to remove non loaded country ${country}`
+          return;
+        }
+        var justOneCountry = compared.length == 1;
+        if (justOneCountry) {
+          throw `Trying to remove ${action.country} being the last one, shouldnt happen`;
+          compareButtonStatusUpdate();
+          return;
+        }
+
+        //Search for create action
+        let orthos = _getCreateAction(country, action.latLon).orthodromic;
+
+        //let orthos = action.orthodromic;
+        let isBase = action.position == 0;
+        if (isBase) {
+          console.log("*** FOUND ORTHOS", orthos.map(x => x.country))
+          var data = compared.slice(1).map(x => {
+            var ortho = orthos[x];
+            if (ortho == null) throw `No ortho for ${x}`;
+            return ortho;
+          });
+
+          //Remove previous arcs, draw new ones
+          let currentBase = compared[0];
+          for (var i = 0 ; i < data.length ; i++) {
+            var destinationCountry = data[i].country;
+            var orthodromic = data[i].ortho;
+
+            removeOrtho(currentBase, destinationCountry);
+          }
+        }
+
+        removeArc(country, undoable);
+      } else {
+        console.error(`Unexpected action type=${action.type}, can't undo `);
+      }
+    }
+
+    redoButton = L.easyButton('fa-repeat', function() {
+      let action = redoStack.slice(-1)[0];
+      console.log("***", "EXECUTE REDO", _actionToString(action))
+
+      try {
+        _redo(action)
+
+        redoStack.pop();
+        undoStack.push(action);
+
+        compareButtonStatusUpdate();
+      } catch(e) {
+        redoButton.button.style = "background-color: red";
+        redoButton.disable();
+
+        notifyHistory(e, compareAll);
+
+        throw e;
+      }
+    }, "Redo").addTo(map);
+
+    undoButton = L.easyButton('fa-undo', function() {
+      let action = undoStack.slice(-1)[0];
+      console.log("***", "EXECUTE UNDO", _actionToString(action))
+
+      try {
+        _undo(action);
+        undoStack.pop();
+        redoStack.push(action);
+
+        compareButtonStatusUpdate();
+      } catch(e) {
+        undoButton.button.style = "background-color: red";
+        undoButton.disable();
+
+        notifyHistory(e, compareAll);
+        throw e;
+      }
+
+
+    }, "Undo").addTo(map);
+
+    function _undo(action) {
+      if (action.type == "add") {
+        _executeRemove(action.country, action.position, action.orthodromic);
+      } else if (action.type == "remove") {
+        let createAction = _getCreateAction(action.country, action.latLng);
+
+        _executeAdd(createAction, action.position);
+      } else {
+        throw `Unexpected action type=${action.type}, can't undo `;
+      }
+    }
+
+    function _redo(action) {
+      let country = action.args[0];
+      var undoable = false;
+
+      if (action.type == "add") {
+        _executeAdd(action)
+      } else if (action.type == "remove") {
+        _executeRemove(action.country, action.position, action.orthodromic);
+      } else {
+        console.error(`Unexpected action type=${action.type}, can't undo `);
+      }
+    }
+
+    function _executeRemove(country, position, countryOrthodromicArcs) {
+      var undoable = false;
+
+      if (!compared.includes(country)) {
+        compareButtonStatusUpdate();
+        throw `Trying to remove non loaded country ${country}`
+        return;
+      }
+      var justOneCountry = compared.length == 1;
+      if (justOneCountry) {
+        throw `Trying to remove ${action.country} being the last one, shouldnt happen`;
+        compareButtonStatusUpdate();
+        return;
+      }
+
+//      let isBase = position == 0;
+//      if (isBase) {
+//        /* FIXME
+//
+//          */
+//        let newBase = compared[1];
+//        let createAction = _getCreateAction(newBase);
+//        let newBaseArcs = compared.slice(2).map(otherCountry => createAction.orthodromic[otherCountry]).reduce((acum, ortho) => {
+//           acum[ortho.country] = ortho;
+//           return acum;
+//         }, {});
+//
+//        _moveOtherCountriesToNewBase(newBase, newBaseArcs)
+//      }
+
+      removeArc(country, undoable);
+    }
+
+    function _executeAdd(action, position) {
+      let country = action.args[0];
+      var undoable = false;
+
+      if (compared.includes(country)) {
+        undoStack.pop();
+        throw new Error(`Unexpected add country ${country}, it is already present in compared`);
+      }
+
+      let isBase = position == 0;
+      if (isBase) {
+        /* FIXME
+
+        */
+        let newBase = action.country;
+        let newBaseOrthos = compared.map(otherCountry => action.orthodromic[otherCountry]).reduce((acum, ortho) => {
+          acum[ortho.country] = ortho;
+          return acum;
+        }, {});
+        _moveOtherCountriesToNewBase(newBase, newBaseOrthos);
+      } else {
+        //console.log("***** finding base arc")
+        //let createArcMultipleIndex = undoStack.findIndex(action => action.type == 'add' && action.country == compared[0]);
+        //if (createArcMultipleIndex < 0) throw `No definition found for base ${compared[0]}`;
+        //let baseToCountryOrthodromic = undoStack[createArcMultipleIndex].orthodromic.find(x => x.country == country).ortho;
+
+        //drawOrtho(map, destinationCountry, baseToCountryOrthodromic, color(position));
+      }
+
+
+      let createArcMultipleArguments = action.args.slice();//clone
+      createArcMultipleArguments[1] = undoable;
+      if (isBase) createArcMultipleArguments[4] = null;//Orthodromic
+      createArcMultipleArguments[9] = position;
+      addArcMulti(...createArcMultipleArguments);
+    }
+
+    compareButton = L.easyButton('fa-bar-chart', function(){
+      compareAll();
+    }, "Compare selected countries").addTo(map);
+
+    compareButtonStatusUpdate();
+  }
 
   console.log("Rendered map");
   return map;
 }
 
+function currentHistory() {
+  function sanitize(actionArray) {
+    return actionArray.map(action => Object.assign({}, action))
+      .map(action => {
+        action.args = action.args.slice();
+        for (let i = 0 ; i < action.args.length ; i++) {
+          let value = action.args[i];
+          if (value instanceof Array || (value != null && value["type"] == "LineString")) {
+            action.args[i] = "nullified";
+          }
+        }
+        action.orthodromic = Object.assign({}, action.orthodromic);
+        for (let key of Object.keys(action.orthodromic)) {
+          action.orthodromic[key].ortho = Object.assign({}, action.orthodromic[key].ortho);
+          action.orthodromic[key].ortho.coordinates = [action.orthodromic[key].ortho.coordinates[0], action.orthodromic[key].ortho.coordinates.slice(-1)[0]];
+        }
+        return action;
+      });
+  }
+
+
+  return { historyActions : sanitize(historyActions), undoStack: sanitize(undoStack), redoStack: sanitize(redoStack) };
+}
+
+var historyActions = [];
+function _addAction(action) {
+  historyActions.push(action);
+
+  if (action.type == 'add') {
+    undoStack.push(action);
+  } else if (action.type == 'remove') {
+    undoStack.push(action);
+  } else {
+    throw `Unexpected action type=${action.type}, ${action}`;
+  }
+}
+
+function compareButtonStatusUpdate() {
+  if (compared.length > 1) {
+    compareButton.enable();
+  }
+  else {
+    compareButton.disable();
+  }
+
+  if (undoStack.length > 1) {
+    undoButton.enable();
+    var currentUndo = undoStack[undoStack.length - 1];
+    undoButton.button.title = `Undo: ${currentUndo.type} ${currentUndo.country} position=${currentUndo.position}`
+  } else {
+    undoButton.disable();
+    undoButton.button.title = "Undo";
+  }
+
+  if (redoStack.length > 0 ) {
+    redoButton.enable();
+    var currentRedo = redoStack[redoStack.length - 1];
+    redoButton.button.title = `Redo: ${currentRedo.type} ${currentRedo.country} position=${currentRedo.position}`
+  } else {
+    redoButton.disable();
+    redoButton.button.title = "Redo";
+  }
+
+  console.log("****", "  COMPARED", compared);
+  console.log("****", "  UNDO")
+  undoStack.map(_actionToString).forEach(x => console.log("****          ", x));
+  console.log("****", "  REDO")
+  redoStack.map(_actionToString).forEach(x => console.log("****          ", x));
+  console.log("****", `Markers: ${Object.keys(markers)}`)
+  console.log("****", `Arcs: ${Object.keys(orthoArcs)}`)
+
+  let arcNames = Object.keys(orthoArcs);
+  for (let key of arcNames) {
+    if (orthoArcs[key] == null) {
+      throw `Null arc ${key}`;
+    } else {
+      let [source, destination] = _orthoKeyToSourceDestination(key);
+      let ortho = orthoArcs[key];
+
+      console.log(`************ ${source} ${destination}`)
+      console.log(`************ ${markers[source].getLatLng()} ${markers[destination].getLatLng()}`)
+      //Distance in meters
+      let orthoSource = ortho.options.style.sourceLatLng;
+      let orthoDestination = ortho.options.style.destinationLatLng;
+      let sourceLatLng = markers[source].getLatLng();
+      let destinationLatLng = markers[destination].getLatLng();
+      let distanceSource = sourceLatLng.distanceTo(orthoSource);
+      let distanceDestination = destinationLatLng.distanceTo(orthoDestination);
+
+      if (distanceSource > 1) {
+        console.log(`*** Source: ${source}`, sourceLatLng);
+        console.log(`*** Ortho`, ortho);
+        console.log(`*** Error in sourceArc expected=${sourceLatLng}, actual=${orthoSource}`);
+        throw `Invalid source ${source} for arc`;
+      }
+
+      if (distanceDestination > 1) {
+        console.log(`*** Destination: ${destination}`, destinationLatLng);
+        console.log(`*** Ortho`, ortho);
+        console.log(`*** Error in destinationArc expected=${destinationLatLng}, actual=${orthoDestination}`);
+        throw `Invalid destination ${destination} for arc`;
+      }
+    }
+  }
+
+
+
+  let expectedArcs = compared.slice(1).map(destination => _orthoKey(compared[0], destination));
+  if (!(arcNames.length == expectedArcs.length && expectedArcs.every(key => orthoArcs[key] != null))) {
+    let missing = expectedArcs.filter(key => !arcNames.includes(key))
+    let unexpected = arcNames.filter(key => !expectedArcs.includes(key))
+    throw `Invalid arcs missing=${missing.join(',')} unexpected=${unexpected.join(',')}`;
+  }
+
+  let markerNames = Object.keys(markers);
+  for (let markerName of markerNames) {
+    if (markers[markerName] == null) {
+      throw `Null arc ${markerName}`;
+    }
+  }
+  if (!sameElements(markerNames, compared)) {
+    throw `Invalid markers=${markerNames} expected=${compared}`;
+  }
+}
+
 async function countryArcOnClickHandler(clickedLatLon) {
   var sourceOrigin = compared[0];
-  $.ajax({ url:`/query?lat0=${clickedLatLon.lat}&lon0=${clickedLatLon.lng}&source=${sourceOrigin}`,
-      success: async function(theData) {
+  var sourceLatLng = markers[sourceOrigin].getLatLng();
+  $.ajax({ url:`/query?lat0=${clickedLatLon.lat}&lon0=${clickedLatLon.lng}&source=${sourceOrigin}&sourceLat=${sourceLatLng.lat}&sourceLon=${sourceLatLng.lng}`,
+      success: function(theData) {
         var data = theData[0];
         if (compared.includes(data.country)) {
           if (compared[0] != data.country) {
@@ -476,49 +891,100 @@ async function countryArcOnClickHandler(clickedLatLon) {
           return;
         }
 
-        if (data != null && data.country != null) {
+        if (data.country != null) {
           var orthodromic = data.ortho;
           var country = data.country;
           var iconName = data.icon;
           var canonicalCountryCoords =  L.latLng(data.latLon.lat, data.latLon.lon);
           var rowObject = data.row;
           var dataset = data.dataset;
-          var tableIndexes = [...Array(table.columns().indexes().length).keys()];
-          var tableColumnNames = tableIndexes.map(i => table.column(i).header().dataset.name);
 
+
+          //FIXME who should be the owner of chartData?
           chartData[country] = data.dataset;
 
 
           var countryColor = color(compared.length);
-          await addChartDataset(country, dataset, countryColor);
-          var row = tableColumnNames.map(name => rowObject[name] || null);
-          table.row.add(row).draw();
 
-          addArc(country, clickedLatLon, canonicalCountryCoords, orthodromic, iconName, countryColor);
+          addArcMulti(country, true, clickedLatLon, canonicalCountryCoords, orthodromic, iconName, countryColor, dataset, rowObject);
         } else {
           console.warn(`No country for lat=${clickedLatLon.lat}, lon=${clickedLatLon.lng}`);
         }
       }
   });
 }
+function addArcMulti(country, undo, clickedLatLon, canonicalCountryCoords, orthodromic, iconName, countryColor, dataset, rowObject, position = -1) {
+  if (undo) redoStack = [];
 
-var arcs = {};
+  addChartDataset(country, dataset, countryColor);
+  addNewTableRow(rowObject);
+  let currentBase = compared[0];
+  addArc(currentBase, country, clickedLatLon, canonicalCountryCoords, orthodromic, iconName, countryColor, position);
+
+  if (undo) {
+    let args = [];
+    for (var i = 0 ; i < arguments.length ; i++) args.push(arguments[i]);
+
+    var action = { type: "add", country: country, args: args, orthodromic: {}, position: compared.indexOf(country), latLng: clickedLatLon };
+    if (compared.indexOf(country) > 0) {
+      console.log(`*******Base=${compared[0]}, newOrtho=${country}, SAVING for undo`)
+      var baseAction = undoStack.slice().reverse().find(action => action.type == "add" && action.args[0] == compared[0]);
+      baseAction.orthodromic[country] = {country: country, ortho: orthodromic, clickedLatLon: clickedLatLon};
+    }
+    _addAction(action);
+  }
+  compareButtonStatusUpdate();
+
+}
+
+var orthoArcs = {};
 var markers = {};
 var compared = [];
 
-function drawOrtho(map, country, orthodromic, arcColor) {
-  arcs[country] = L.geoJSON(orthodromic, { style: {color: arcColor} }).addTo(map);
+function _orthoKey(source, destination) {
+  return `${source} -> ${destination}`;
+}
+
+function _orthoKeyToSourceDestination(key) {
+  return key.split(" -> ");
+}
+
+function drawOrtho(map, source, destination, orthodromic, arcColor) {
+  let key = _orthoKey(source, destination);
+
+  if (orthoArcs[key] != null) throw `Trying to created duplicated arc ${key}`;
+
+  let sourceLatLng = L.latLng(orthodromic.coordinates[0].slice().reverse());
+  let destinationLatLng = L.latLng(orthodromic.coordinates.slice(-1)[0].slice().reverse());
+  console.log(`******* source: ${sourceLatLng} destination: ${destinationLatLng}`);
+
+  orthoArcs[key] = L.geoJSON(orthodromic, { style: {color: arcColor, sourceLatLng: sourceLatLng, destinationLatLng: destinationLatLng} }).addTo(map);
+}
+
+function removeOrtho(source, destination) {
+  let key = _orthoKey(source, destination);
+
+  if (orthoArcs[key] != null) {
+    orthoArcs[key].remove();
+    delete orthoArcs[key];
+  } else {
+    console.warn(`*** can not remove arc ${key} because is null`);
+  }
 }
 
 function iconUrl(iconName) {
   return `https://static.safetravelcorridor.com/assets/icons/${iconName}.png`;
 }
 
-var coords = {};
-function addArc(country, clickedLatLon, canonicalLatLon, orthodromic, iconName, color, closeableButtons=true, comparable=true) {
-  coords[country] = canonicalLatLon;
+//var coords = {};
+function addArc(source, country, clickedLatLon, canonicalLatLon, orthodromic, iconName, color, position) {
+//  coords[country] = canonicalLatLon;
+  let closeableButtons=true;
+  let comparable=true;
+
   if (orthodromic != null) {
-    drawOrtho(map, country, orthodromic, color);
+    console.log(`**** Add arc to ${country}`)
+    drawOrtho(map, source, country, orthodromic, color);
   }
 
   var myIcon = L.icon({
@@ -532,10 +998,15 @@ function addArc(country, clickedLatLon, canonicalLatLon, orthodromic, iconName, 
   markers[country] = marker;
 
   if (comparable) {
-    compared.push(country);
+    if (position < 0) {
+      compared.push(country);
+    } else {
+      compared.splice(position, 0, country);
+    }
+
   }
 
-  addArcButton(country, iconUrl(iconName), closeableButtons);
+  addArcButton(country, iconUrl(iconName), closeableButtons, position);
 }
 
 function _popupid(country) {
@@ -671,58 +1142,139 @@ function compareAll() {
   window.location.href=compareUrl;
 }
 
-function removeArc(destinationCountry) {
-  console.log("Removing arc")
+function removeArc(destinationCountry, undo=true) {
+  console.log(`Removing arc ${destinationCountry}`);
+  if (undo) redoStack = [];
+
+  //if (undoStack.find(action => action.type == 'add' && action.country == destinationCountry) == null) {
+  //  throw "NO ADD DATA FOR" + destinationCountry;
+//    console.log("************+ No undo data for " + destinationCountry);
+//    var latLng = markers[destinationCountry].getLatLng();
+//    var orthodromic = null;
+//    var iconName = markers[destinationCountry].options.icon.options.iconUrl.match("/([^/]+).png")[1];
+//    var countryColor = null;
+//    var dataset = chartData[destinationCountry].slice(-1)[0];
+//    var rowObject = table.rows().data().toArray().find(row => row[1].match(">(.+)<")[1] == destinationCountry).slice();
+//    console.log("FOUND", rowObject)
+//    undoStack.push({type: "add", country: destinationCountry, args: [destinationCountry, undo, latLng, latLng, orthodromic, iconName, countryColor, dataset, rowObject]})
+//  }
+
+  let position = compared.indexOf(destinationCountry);
   if (compared.length == 1 || compared[0] == destinationCountry) {
     if (compared.length > 2) {
       var newOriginName = compared[1];
+      var newOriginLatLon = markers[newOriginName].getLatLng()
       var subQuery = compared.slice(2)
         .map(destination => markers[destination].getLatLng())
         .map((latLon, i) => `lat${i}=${latLon.lat}&lon${i}=${latLon.lng}` ).join("&");
-      var query = `/query?source=${newOriginName}&${subQuery}`;
-      $.ajax({ url:query,
-          success: function(data) {
-            //Move arcs to new base
-            for (var i = 0 ; i < data.length ; i++) {
-              var destinationCountry = data[i].country;
-              var orthodromic = data[i].ortho;
-              var arcColor = arcs[destinationCountry].color;
-              arcs[destinationCountry].remove();
-              drawOrtho(map, destinationCountry, orthodromic, color(i));
-            }
+      var query = `/query?source=${newOriginName}&sourceLat=${newOriginLatLon.lat}&sourceLon=${newOriginLatLon.lng}&${subQuery}`;
+      var baseAction = _getCreateAction(newOriginName, newOriginLatLon);
+      let cachedOrthos = compared.slice(2).every(c => baseAction.orthodromic[c] != null);
 
-            var countryToRemove = compared[0];
-            shiftBase();
-            removeRow(countryToRemove);
-          }
-      });
+      if (cachedOrthos) {
+        /* FIXME copy paste
+
+        */
+        let newBase = newOriginName;
+        let newBaseOrthos = compared.slice(2).map(otherCountry => baseAction.orthodromic[otherCountry]).reduce((acum, ortho) => {
+            acum[ortho.country] = ortho;
+            return acum;
+          }, {});
+
+        console.log(`******  CACHED NEW BASE=${newOriginName}, arcs=${Object.keys(newBaseOrthos)}, compared=${compared}`)
+        _moveOtherCountriesToNewBase(newOriginName, newBaseOrthos);
+
+        var countryToRemove = compared[0];
+        var countryToRemoveLatLng = markers[countryToRemove].getLatLng();
+        shiftBase();
+        removeRow(countryToRemove);
+
+        if (undo) {
+          var action = {type: "remove", country: countryToRemove, args: [countryToRemove], position: position, orthodromic: {}, latLng: countryToRemoveLatLng};
+          _addAction(action);
+        }
+        compareButtonStatusUpdate();
+      } else {
+        $.ajax({ url:query,
+            success: function(data) {
+              //Move arcs to new base
+              console.log(`******  AJAX MOVE TO NEW BASE=${newOriginName}, arcs=${data.map(x=> x.country)}, compared=${compared}`)
+
+              for (var i = 0 ; i < data.length ; i++) {
+                var destinationCountry = data[i].country;
+                var orthodromic = data[i].ortho;
+
+                //removeOrtho(destinationCountry);
+                //drawOrtho(map, destinationCountry, orthodromic, color(i));
+
+                //Add ortho to createAction cache
+                baseAction.orthodromic[destinationCountry] = {country: destinationCountry, ortho: orthodromic, clickedLatLon: data[i].clickedLatLon};
+              }
+              /* FIXME copy paste
+
+              */
+              let newBase = newOriginName;
+              let newBaseOrthos = compared.slice(2).map(otherCountry => baseAction.orthodromic[otherCountry]).reduce((acum, ortho) => {
+                 acum[ortho.country] = ortho;
+                 return acum;
+               }, {});
+              _moveOtherCountriesToNewBase(newBase, newBaseOrthos);
+
+              var countryToRemove = compared[0];
+              var countryToRemoveLatLng = markers[countryToRemove].getLatLng();
+              shiftBase();
+              removeRow(countryToRemove);
+
+              if (undo) {
+                var action = {type: "remove", country: countryToRemove, args: [countryToRemove], position: position, orthodromic: {}, latLng: countryToRemoveLatLng};
+                _addAction(action);
+              }
+              compareButtonStatusUpdate();
+            }
+        });
+      }
     } else if (compared.length == 2) {
       var countryToRemove = compared[0];
+      var countryToRemoveLatLng = markers[countryToRemove].getLatLng();
       shiftBase();
       removeRow(countryToRemove);
+
+      if (undo) {
+        var action = {type: "remove", country: countryToRemove, args: [countryToRemove], position: position, orthodromic: {}, latLng: countryToRemoveLatLng};
+        _addAction(action);
+      }
+      compareButtonStatusUpdate();
     } else {
       alert(`You can't remove your origin country: ${compared[0]}. Try instead to add more countries or start over from another country.`);
     }
+
     return;
   }
 
-  compared.splice(compared.indexOf(destinationCountry), 1);
+  var destinationCountryLatLng = markers[destinationCountry].getLatLng();
+  compared.splice(position, 1);
 
-  if (arcs[destinationCountry] != null) {
-    arcs[destinationCountry].remove();
-    arcs[destinationCountry] = null;
-  }
+  let currentBase = compared[0];
+  removeOrtho(currentBase, destinationCountry);
 
   if (markers[destinationCountry] != null) {
     markers[destinationCountry].closePopup();
     markers[destinationCountry].unbindPopup();
     markers[destinationCountry].remove();
-    markers[destinationCountry] = null;
+    delete markers[destinationCountry];
   }
 
   var arcButtonClose = document.getElementById(`arc_close_${destinationCountry}`);
+  if (arcButtonClose == null) throw `No button for ${destinationCountry}`;
   arcButtonClose.parentElement.remove();
   removeRow(destinationCountry);
+
+  if (undo) {
+    var action = {type: "remove", country: destinationCountry, args: [destinationCountry], position: position, orthodromic: {}, latLng: destinationCountryLatLng };
+    _addAction(action)
+  }
+  compareButtonStatusUpdate();
+
   console.log("Removed arc")
 }
 
@@ -739,15 +1291,17 @@ function shiftBase() {
   var newOriginName = compared[0];
 
   //Move new base marker to canonical
-  var canonicalLatLon = coords[newOriginName];
-  markers[newOriginName].setLatLng(canonicalLatLon);
+  //var canonicalLatLon = coords[newOriginName];
+  //markers[newOriginName].setLatLng(canonicalLatLon);
 
   //Remove arc from old base to new base
-  arcs[newOriginName].remove();
-  arcs[newOriginName] = null;
+  removeOrtho(oldBase, newOriginName);
+
   //Remove old base marker
-  markers[oldBase].remove();
-  markers[oldBase] = null;
+  if (markers[oldBase] != null) {
+    markers[oldBase].remove();
+    delete markers[oldBase];
+  }
 
   //Remove button
   var arcButtonClose = document.getElementById(`arc_close_${oldBase}`);
@@ -755,7 +1309,7 @@ function shiftBase() {
   console.log("Removed marker")
 }
 
-function addArcButton(destinationCountry, iconUrl, closeable=true) {
+function addArcButton(destinationCountry, iconUrl, closeable, position) {
   //FIXME render
   var li = document.createElement("li");
   var textNode = document.createElement("span")
@@ -777,7 +1331,13 @@ function addArcButton(destinationCountry, iconUrl, closeable=true) {
   if (closeable) {
     li.appendChild(closeButton);
   }
-  document.getElementById("sourceList").appendChild(li);
+
+  let parent = document.getElementById("sourceList");
+  if (position < 1) {
+    parent.appendChild(li);
+  } else {
+    parent.insertBefore(li, parent.children[position]);
+  }
 
   closeButton.addEventListener("click", function() {
     //var sourceName = this.parentElement.childNodes[1].textContent;
@@ -845,6 +1405,17 @@ function createTable(containerId, buttonGroups, pageLength) {
     buttonApi.active(true);
   });
   console.log("Rendered table");
+}
+
+function addNewTableRow(rowObject) {
+  if (table == null) {
+      console.log("***** SKIP TABLE is init")
+      return;
+  }
+  var tableIndexes = [...Array(table.columns().indexes().length).keys()];
+  var tableColumnNames = tableIndexes.map(i => table.column(i).header().dataset.name);
+  var row = tableColumnNames.map(name => rowObject[name] || null);
+  table.row.add(row).draw();
 }
 
 function tableCurrentPageLocalizableNames() {
