@@ -3,8 +3,8 @@ console.logCopy = console.log.bind(console);
 
 console.log = function(...data)
 {
-    if (data instanceof Array && data.length > 0 && !data[0].startsWith("**")) return;
-    if (typeof data  === "string" && !data.startsWith("**")) return;
+//    if (data instanceof Array && data.length > 0 && !data[0].startsWith("**")) return;
+//    if (typeof data  === "string" && !data.startsWith("**")) return;
     var currentDate = moment().format("HH:mm:ss.SSS") + ': ';
     this.logCopy(currentDate, ...data);
 };
@@ -87,6 +87,9 @@ async function receiveDatasetsToShow(datasetLabels) {
     console.log(`Already updating, added update request. Queue size=${updateQueue.length}`);
     return;
   }
+  let label = `Update charts`;
+  console.group(label);
+  console.time(label);
 
   window.requestAnimationFrame(() => showProgressBar("Updating charts..."), 0);
 
@@ -109,7 +112,8 @@ async function receiveDatasetsToShow(datasetLabels) {
         if (i == charts.length - 1) {
               updateQueue.pop();
               requestAnimationFrame(() => hideProgressBar());
-              console.log("Updated charts");
+              console.timeEnd(label);
+              console.groupEnd();
               //Race condition
               if (updateQueue.length > 0) i = 0;
             }
@@ -173,21 +177,30 @@ function plot(chartData, name, datasetLabels, isDetailed) {
     var config = {
       type: 'line',
       //parsing: false,
-      //normalized: true,
+
       data: {
         labels: xLabels,
         datasets: selectedDatasets
       },
       options: {
-        //animation: false,
-        //elements: {
-        //    line: {
-        //        tension: 0, // disables bezier curves,
-        //        fill: false,
-        //        stepped: false,
-        //        borderDash: []
-        //    }
-        //},
+        normalized: true,
+        spanGaps: true, // enable for all datasets
+        //showLines: false, // disable for all datasets
+        animation: {
+                    duration: 0 // general animation time
+        },
+        hover: {
+            animationDuration: 0 // duration of animations when hovering an item
+        },
+        responsiveAnimationDuration: 0,
+        elements: {
+            line: {
+                tension: 0, // disables bezier curves
+//                fill: false,
+//                stepped: false,
+//                borderDash: []
+            }
+        },
         responsive: true,
         onClick: x => {
           if (isDetailed) return;
@@ -222,6 +235,12 @@ function plot(chartData, name, datasetLabels, isDetailed) {
             time: {
               unit: 'day',
               tooltipFormat: 'MMMM D, YYYY'
+            },
+            ticks: {
+                autoSkip: false,
+                maxRotation: 45,
+                minRotation: 45,
+                sampleSize: 5
             }
           }],
           yAxes: [{
@@ -434,7 +453,7 @@ var undoStack = [];
 var redoStack = [];
 
 function _actionToString(action) {
-  return `${action.type} ${action.country} position=${action.position} arcs=${Object.keys(action.orthodromic)}`;
+  return `${action.type} ${action.country} position=${action.position} arcs=${Object.keys(action.orthodromic).join(', ')}`;
 }
 
 function _getCreateAction(country, clickedLatLon) {
@@ -445,6 +464,7 @@ function _getCreateAction(country, clickedLatLon) {
 }
 
 function _moveOtherCountriesToNewBase(newBase, newBaseOrthodromics) {
+
   Object.keys(newBaseOrthodromics).forEach(country => {
     if (!compared.includes(country)) throw `Unknown ortho ${country}, expected any of ${compared}`;
   })
@@ -452,26 +472,29 @@ function _moveOtherCountriesToNewBase(newBase, newBaseOrthodromics) {
   let currentBaseArcs = compared.slice(1);
 
   let newBaseArcs = Object.keys(newBaseOrthodromics);
-  console.log("****", newBaseOrthodromics)
-  console.log(`*** _moveOtherCountriesToNewBase currentBase=${currentBase}, currentBasearcs=${currentBaseArcs}, newBase=${newBase}, newBaseArcs=${newBaseArcs}`)
+  console.group(`moveOtherCountriesToNewBase currentBase=${currentBase}, currentBasearcs=${currentBaseArcs} -> newBase=${newBase}, newBaseArcs=${newBaseArcs}`)
 
   let newBaseOrthos = newBaseArcs.map(x => newBaseOrthodromics[x]);
 
   //Remove previous base arcs
+  console.group(`Remove old base ${currentBase} arcs`);
   for (let i = 0 ; i < currentBaseArcs.length ; i++) {
     let destinationCountry = currentBaseArcs[i];
-    console.log(`**** Remove old base arc ${currentBase}->${destinationCountry}`)
+    console.log(`Arc ${currentBase} -> ${destinationCountry}`)
     removeOrtho(currentBase, destinationCountry);
   }
+  console.groupEnd();
 
   //draw new base arcs
+  console.group(`Draw arcs for new base ${newBase}`);
   for (let i = 0 ; i < newBaseOrthos.length ; i++) {
     let destinationCountry = newBaseOrthos[i].country;
     let orthodromic = newBaseOrthos[i].ortho;
 
-    console.log(`***** Draw arc for new base ${newBase}->${destinationCountry}`)
+    console.log(`Arc ${newBase} -> ${destinationCountry}`)
     drawOrtho(map, newBase, destinationCountry, orthodromic, color(i));
   }
+  console.groupEnd();
 }
 
 function notifyHistory(e, lambda) {
@@ -604,7 +627,6 @@ async function drawMap(mapDivId, originName, originPoint, onClickHandler, compar
 
     redoButton = L.easyButton('fa-repeat', function() {
       let action = redoStack.slice(-1)[0];
-      console.log("***", "EXECUTE REDO", _actionToString(action))
 
       try {
         _redo(action)
@@ -625,7 +647,6 @@ async function drawMap(mapDivId, originName, originPoint, onClickHandler, compar
 
     undoButton = L.easyButton('fa-undo', function() {
       let action = undoStack.slice(-1)[0];
-      console.log("***", "EXECUTE UNDO", _actionToString(action))
 
       try {
         _undo(action);
@@ -645,27 +666,37 @@ async function drawMap(mapDivId, originName, originPoint, onClickHandler, compar
     }, "Undo").addTo(map);
 
     function _undo(action) {
-      if (action.type == "add") {
-        _executeRemove(action.country, action.position, action.orthodromic);
-      } else if (action.type == "remove") {
-        let createAction = _getCreateAction(action.country, action.latLng);
+      console.group(`Execute undo ${_actionToString(action)}`);
+      try {
+        if (action.type == "add") {
+          _executeRemove(action.country, action.position, action.orthodromic);
+        } else if (action.type == "remove") {
+          let createAction = _getCreateAction(action.country, action.latLng);
 
-        _executeAdd(createAction, action.position);
-      } else {
-        throw `Unexpected action type=${action.type}, can't undo `;
-      }
+          _executeAdd(createAction, action.position);
+        } else {
+          throw `Unexpected action type=${action.type}, can't undo `;
+        }
+      } finally {
+       console.groupEnd();
+     }
     }
 
     function _redo(action) {
-      let country = action.args[0];
-      var undoable = false;
+      console.group(`Execute undo ${_actionToString(action)}`);
+      try {
+        let country = action.args[0];
+        var undoable = false;
 
-      if (action.type == "add") {
-        _executeAdd(action)
-      } else if (action.type == "remove") {
-        _executeRemove(action.country, action.position, action.orthodromic);
-      } else {
-        console.error(`Unexpected action type=${action.type}, can't undo `);
+        if (action.type == "add") {
+          _executeAdd(action)
+        } else if (action.type == "remove") {
+          _executeRemove(action.country, action.position, action.orthodromic);
+        } else {
+          console.error(`Unexpected action type=${action.type}, can't undo `);
+        }
+      } finally {
+        console.groupEnd();
       }
     }
 
@@ -813,73 +844,88 @@ function compareButtonStatusUpdate() {
     redoButton.button.title = "Redo";
   }
 
-  console.log("****", "  COMPARED", compared);
-  console.log("****", "  UNDO")
-  undoStack.map(_actionToString).forEach(x => console.log("****          ", x));
-  console.log("****", "  REDO")
-  redoStack.map(_actionToString).forEach(x => console.log("****          ", x));
-  console.log("****", `Markers: ${Object.keys(markers)}`)
-  console.log("****", `Arcs: ${Object.keys(orthoArcs)}`)
+  console.group("Validate")
+  console.log("COMPARED", compared);
+  console.group(`Undo (${undoStack.length})`);
+  undoStack.map(_actionToString).forEach(x => console.log(x));
+  console.groupEnd()
+  console.group(`Redo (${redoStack.length})`);
+  redoStack.map(_actionToString).forEach(x => console.log(x));
+  console.groupEnd()
+  console.log(`Markers(${Object.keys(markers).length}): ${Object.keys(markers).join(', ')}`)
+  console.log(`Arcs (${Object.keys(orthoArcs).length})`);
 
-  let arcNames = Object.keys(orthoArcs);
-  for (let key of arcNames) {
-    if (orthoArcs[key] == null) {
-      throw `Null arc ${key}`;
-    } else {
-      let [source, destination] = _orthoKeyToSourceDestination(key);
-      let ortho = orthoArcs[key];
+  try {
 
-      console.log(`************ ${source} ${destination}`)
-      console.log(`************ ${markers[source].getLatLng()} ${markers[destination].getLatLng()}`)
-      //Distance in meters
-      let orthoSource = ortho.options.style.sourceLatLng;
-      let orthoDestination = ortho.options.style.destinationLatLng;
-      let sourceLatLng = markers[source].getLatLng();
-      let destinationLatLng = markers[destination].getLatLng();
-      let distanceSource = sourceLatLng.distanceTo(orthoSource);
-      let distanceDestination = destinationLatLng.distanceTo(orthoDestination);
+    let arcNames = Object.keys(orthoArcs);
+    console.group(`Arcs (${arcNames.length})`);
+    try {
+      for (let key of arcNames) {
+        if (orthoArcs[key] == null) {
+          throw `Null arc ${key}`;
+        } else {
+          let [source, destination] = _orthoKeyToSourceDestination(key);
+          let ortho = orthoArcs[key];
 
-      if (distanceSource > 1) {
-        console.log(`*** Source: ${source}`, sourceLatLng);
-        console.log(`*** Ortho`, ortho);
-        console.log(`*** Error in sourceArc expected=${sourceLatLng}, actual=${orthoSource}`);
-        throw `Invalid source ${source} for arc`;
+          console.log(`${source}(${markers[source].getLatLng()}) -> ${destination}(${markers[destination].getLatLng()})`)
+          //Distance in meters
+          let orthoSource = ortho.options.style.sourceLatLng;
+          let orthoDestination = ortho.options.style.destinationLatLng;
+          let sourceLatLng = markers[source].getLatLng();
+          let destinationLatLng = markers[destination].getLatLng();
+          let distanceSource = sourceLatLng.distanceTo(orthoSource);
+          let distanceDestination = destinationLatLng.distanceTo(orthoDestination);
+
+          if (distanceSource > 1) {
+            console.log(`*** Source: ${source}`, sourceLatLng);
+            console.log(`*** Ortho`, ortho);
+            console.log(`*** Error in sourceArc expected=${sourceLatLng}, actual=${orthoSource}`);
+            throw `Invalid source ${source} for arc`;
+          }
+
+          if (distanceDestination > 1) {
+            console.log(`*** Destination: ${destination}`, destinationLatLng);
+            console.log(`*** Ortho`, ortho);
+            console.log(`*** Error in destinationArc expected=${destinationLatLng}, actual=${orthoDestination}`);
+            throw `Invalid destination ${destination} for arc`;
+          }
+        }
       }
+    } finally {
+      console.groupEnd();
+    }
 
-      if (distanceDestination > 1) {
-        console.log(`*** Destination: ${destination}`, destinationLatLng);
-        console.log(`*** Ortho`, ortho);
-        console.log(`*** Error in destinationArc expected=${destinationLatLng}, actual=${orthoDestination}`);
-        throw `Invalid destination ${destination} for arc`;
+
+
+    let expectedArcs = compared.slice(1).map(destination => _orthoKey(compared[0], destination));
+    if (!(arcNames.length == expectedArcs.length && expectedArcs.every(key => orthoArcs[key] != null))) {
+      let missing = expectedArcs.filter(key => !arcNames.includes(key))
+      let unexpected = arcNames.filter(key => !expectedArcs.includes(key))
+      throw `Invalid arcs missing=${missing.join(',')} unexpected=${unexpected.join(',')}`;
+    }
+
+    let markerNames = Object.keys(markers);
+    for (let markerName of markerNames) {
+      if (markers[markerName] == null) {
+        throw `Null arc ${markerName}`;
       }
     }
-  }
-
-
-
-  let expectedArcs = compared.slice(1).map(destination => _orthoKey(compared[0], destination));
-  if (!(arcNames.length == expectedArcs.length && expectedArcs.every(key => orthoArcs[key] != null))) {
-    let missing = expectedArcs.filter(key => !arcNames.includes(key))
-    let unexpected = arcNames.filter(key => !expectedArcs.includes(key))
-    throw `Invalid arcs missing=${missing.join(',')} unexpected=${unexpected.join(',')}`;
-  }
-
-  let markerNames = Object.keys(markers);
-  for (let markerName of markerNames) {
-    if (markers[markerName] == null) {
-      throw `Null arc ${markerName}`;
+    if (!sameElements(markerNames, compared)) {
+      throw `Invalid markers=${markerNames} expected=${compared}`;
     }
-  }
-  if (!sameElements(markerNames, compared)) {
-    throw `Invalid markers=${markerNames} expected=${compared}`;
+  }  finally {
+    console.groupEnd();
   }
 }
 
 async function countryArcOnClickHandler(clickedLatLon) {
   var sourceOrigin = compared[0];
   var sourceLatLng = markers[sourceOrigin].getLatLng();
+  let label = `Ajax query call country for clicked coordinates`;
+  console.time(label);
   $.ajax({ url:`/query?lat0=${clickedLatLon.lat}&lon0=${clickedLatLon.lng}&source=${sourceOrigin}&sourceLat=${sourceLatLng.lat}&sourceLon=${sourceLatLng.lng}`,
       success: function(theData) {
+        console.timeEnd(label);
         var data = theData[0];
         if (compared.includes(data.country)) {
           if (compared[0] != data.country) {
@@ -916,25 +962,31 @@ async function countryArcOnClickHandler(clickedLatLon) {
 function addArcMulti(country, undo, clickedLatLon, canonicalCountryCoords, orthodromic, iconName, countryColor, dataset, rowObject, position = -1) {
   if (undo) redoStack = [];
 
-  addChartDataset(country, dataset, countryColor);
-  addNewTableRow(rowObject);
-  let currentBase = compared[0];
-  addArc(currentBase, country, clickedLatLon, canonicalCountryCoords, orthodromic, iconName, countryColor, position);
+  let label = `Add arc ${compared[0]} -> ${country}`;
+  console.group(label)
+  console.time(label);
+  try {
+    addChartDataset(country, dataset, countryColor);
+    addNewTableRow(rowObject);
+    let currentBase = compared[0];
+    addArc(currentBase, country, clickedLatLon, canonicalCountryCoords, orthodromic, iconName, countryColor, position);
 
-  if (undo) {
-    let args = [];
-    for (var i = 0 ; i < arguments.length ; i++) args.push(arguments[i]);
+    if (undo) {
+      let args = [];
+      for (var i = 0 ; i < arguments.length ; i++) args.push(arguments[i]);
 
-    var action = { type: "add", country: country, args: args, orthodromic: {}, position: compared.indexOf(country), latLng: clickedLatLon };
-    if (compared.indexOf(country) > 0) {
-      console.log(`*******Base=${compared[0]}, newOrtho=${country}, SAVING for undo`)
-      var baseAction = undoStack.slice().reverse().find(action => action.type == "add" && action.args[0] == compared[0]);
-      baseAction.orthodromic[country] = {country: country, ortho: orthodromic, clickedLatLon: clickedLatLon};
+      var action = { type: "add", country: country, args: args, orthodromic: {}, position: compared.indexOf(country), latLng: clickedLatLon };
+      if (compared.indexOf(country) > 0) {
+        var baseAction = undoStack.slice().reverse().find(action => action.type == "add" && action.args[0] == compared[0]);
+        baseAction.orthodromic[country] = {country: country, ortho: orthodromic, clickedLatLon: clickedLatLon};
+      }
+      _addAction(action);
     }
-    _addAction(action);
+    compareButtonStatusUpdate();
+  } finally {
+    console.timeEnd(label);
+    console.groupEnd();
   }
-  compareButtonStatusUpdate();
-
 }
 
 var orthoArcs = {};
@@ -956,7 +1008,7 @@ function drawOrtho(map, source, destination, orthodromic, arcColor) {
 
   let sourceLatLng = L.latLng(orthodromic.coordinates[0].slice().reverse());
   let destinationLatLng = L.latLng(orthodromic.coordinates.slice(-1)[0].slice().reverse());
-  console.log(`******* source: ${sourceLatLng} destination: ${destinationLatLng}`);
+  console.log(`${source}(${sourceLatLng}), ${destination}(${destinationLatLng})`);
 
   orthoArcs[key] = L.geoJSON(orthodromic, { style: {color: arcColor, sourceLatLng: sourceLatLng, destinationLatLng: destinationLatLng} }).addTo(map);
 }
@@ -983,7 +1035,6 @@ function addArc(source, country, clickedLatLon, canonicalLatLon, orthodromic, ic
   let comparable=true;
 
   if (orthodromic != null) {
-    console.log(`**** Add arc to ${country}`)
     drawOrtho(map, source, country, orthodromic, color);
   }
 
@@ -1047,8 +1098,11 @@ function _renderMiniTable(...selectedSources) {
 }
 
 function countryPopupOnclickHandler(clickedLatLon) {
+  let label = `Ajax query for coordinates`
+  console.time(label);
   $.ajax({ url:`/query?lat0=${clickedLatLon.lat}&lon0=${clickedLatLon.lng}&source=europe`,
       success: async function(theData) {
+        console.timeEnd(label);
         var data = theData[0];
 
         if (data != null && data.country != null) {
@@ -1143,7 +1197,8 @@ function compareAll() {
 }
 
 function removeArc(destinationCountry, undo=true) {
-  console.log(`Removing arc ${destinationCountry}`);
+  let label = `Remove arc ${destinationCountry}`
+  console.group(label);
   if (undo) redoStack = [];
 
   //if (undoStack.find(action => action.type == 'add' && action.country == destinationCountry) == null) {
@@ -1195,10 +1250,11 @@ function removeArc(destinationCountry, undo=true) {
         }
         compareButtonStatusUpdate();
       } else {
+        console.log(`Ajax query call: newBase=${newOriginName}, compared=${compared.join(', ')}`)
         $.ajax({ url:query,
             success: function(data) {
               //Move arcs to new base
-              console.log(`******  AJAX MOVE TO NEW BASE=${newOriginName}, arcs=${data.map(x=> x.country)}, compared=${compared}`)
+              console.log(`Ajax query call received: newBase=${newOriginName}, arcs=${data.map(x=> x.country).join(', ')}, compared=${compared.join(', ')}`)
 
               for (var i = 0 ; i < data.length ; i++) {
                 var destinationCountry = data[i].country;
@@ -1230,6 +1286,7 @@ function removeArc(destinationCountry, undo=true) {
                 _addAction(action);
               }
               compareButtonStatusUpdate();
+              console.groupEnd();
             }
         });
       }
@@ -1244,8 +1301,10 @@ function removeArc(destinationCountry, undo=true) {
         _addAction(action);
       }
       compareButtonStatusUpdate();
+      console.groupEnd();
     } else {
       alert(`You can't remove your origin country: ${compared[0]}. Try instead to add more countries or start over from another country.`);
+      console.groupEnd();
     }
 
     return;
@@ -1275,7 +1334,7 @@ function removeArc(destinationCountry, undo=true) {
   }
   compareButtonStatusUpdate();
 
-  console.log("Removed arc")
+  console.groupEnd();
 }
 
 function removeRow(name) {
@@ -1286,7 +1345,7 @@ function removeRow(name) {
 }
 
 function shiftBase() {
-  console.log("Removing marker")
+  console.group("Remove marker")
   var oldBase = compared.shift();
   var newOriginName = compared[0];
 
@@ -1306,7 +1365,7 @@ function shiftBase() {
   //Remove button
   var arcButtonClose = document.getElementById(`arc_close_${oldBase}`);
   arcButtonClose.parentElement.remove();
-  console.log("Removed marker")
+  console.groupEnd();
 }
 
 function addArcButton(destinationCountry, iconUrl, closeable, position) {
