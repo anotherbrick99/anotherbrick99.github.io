@@ -68,6 +68,15 @@ function addChartDataset(country, dataPoints, color) {
     var xLabel = chart.xLabel;
     var yLabel = chart.yLabel;
     var dataset = buildDataset(country, yLabel, normalize(dataPoints, xLabels, xLabel, yLabel), color, isMainDataset);
+
+    //FIXME copypaste datasets()
+    var flip = chartData.rawToSmoothed[yLabel] || chartData.smoothedToRaw[yLabel];
+    if (flip != null) {
+      console.log(`FLIP ${yLabel} => ${flip}`)
+      buildDataset(country, flip, normalize(dataPoints, xLabels, xLabel, flip), color, isMainDataset);
+    } else {
+      console.log(`NO FLIP FOR ${yLabel}`)
+    }
   });
 }
 
@@ -81,7 +90,8 @@ async function addDatasetToChart(chart, dataset) {
 }
 
 var updateQueue = [];
-async function receiveDatasetsToShow(datasetLabels) {
+async function receiveDatasetsToShow(datasetLabels, smoothed) {
+console.log("receiveDatasetsToShow", datasetLabels, smoothed)
   updateQueue.push("");
   if (updateQueue.length > 1) {
     console.log(`Already updating, added update request. Queue size=${updateQueue.length}`);
@@ -100,6 +110,13 @@ async function receiveDatasetsToShow(datasetLabels) {
 
     setTimeout(() => {
       requestAnimationFrame( () => notify((i + 0.5)/charts.length * 100, `Loading ${chart.yLabel}...`))
+      let requiredYLabel = calcYLabel(chartData, chart.rawName, smoothed);
+
+      if (chart.yLabel != requiredYLabel) {
+        console.log("**************", chart.yLabel, requiredYLabel);
+        //force
+        chart.yLabel = requiredYLabel;
+      }
       filterDatasetsInChart(chart, datasetLabels.map(label => `${label}_${chart.yLabel}`));
       requestAnimationFrame(() => notify((i + 1)/charts.length * 100, `Loaded ${chart.yLabel}`), 0)
       if (updateQueue.length > 1) {
@@ -134,11 +151,16 @@ function filterDatasetsInChart(chart, datasetIds) {
   var currentIds = ids.toArray();
   var datasetIds = datasetIds.toArray();
 
+  console.log(datasetIds)
+  console.log(currentIds)
+  console.log("jhsadkjash")
   if (sameElements(currentIds, datasetIds)) {
     console.log(`  Chart ${chart.canvas.id}: No changes`);
     return;
   };
+  console.log("PASS")
   var currentDatasetNames = currentIds.map(id => datasetsById[id].label);
+
   var newDatasetNames = datasetIds.map(id => datasetsById[id].label);
   console.log(`  Current datasets: ${currentDatasetNames}(${currentDatasetNames.length})`);
   console.log(`  New datasets: ${newDatasetNames}(${newDatasetNames.length})`);
@@ -155,10 +177,10 @@ function filterDatasetsInChart(chart, datasetIds) {
 }
 
 var xLabels = null;
-function plot(chartData, name, datasetLabels, isDetailed) {
+function plot(chartData, smoothed, name, datasetLabels, isDetailed) {
   var translations = chartData.translations;
   var xLabel = 'date';
-  var yLabel = name;
+  var yLabel = calcYLabel(chartData, name, smoothed);
   var xLabels = buildXLabels(chartData, xLabel);//chartData.xLabels;
   var dataToRender = Object.keys(chartData)
                       .filter(label => label.endsWith("Name"))
@@ -205,8 +227,9 @@ function plot(chartData, name, datasetLabels, isDetailed) {
         onClick: x => {
           if (isDetailed) return;
 
-          var miniDatasets = chartsByName[`chart_${name}_mini`].config.data.datasets.map(x => x.label)
-          plot(chartData, name, miniDatasets, true);
+          let miniDatasets = chartsByName[`chart_${name}_mini`].config.data.datasets.map(x => x.label);
+          let miniSmooth = chartsByName[`chart_${name}_mini`].yLabel.includes("smoothed");
+          plot(chartData, miniSmooth, name, miniDatasets, true);
           document.getElementById("chartModal").style.display = "block";
           document.getElementById("chartModal").focus();
         },
@@ -293,7 +316,12 @@ function plot(chartData, name, datasetLabels, isDetailed) {
     theChart.xLabels = xLabels;
     theChart.xLabel = xLabel;
     theChart.yLabel = yLabel;
+    theChart.rawName = name;
   //}
+}
+
+function calcYLabel(chartData, name, smoothed) {
+  return !smoothed ? name : (chartData.smoothedToRaw[name] || name);
 }
 
 function datasets(dataToRender, xLabels, xLabel, yLabel) {
@@ -303,6 +331,13 @@ function datasets(dataToRender, xLabels, xLabel, yLabel) {
     var color = chartData[`${source}Color`]
 
     var isMainDataset = idx == 0;
+
+    //FIXME copypaste addChartDataset
+    var flip = chartData.rawToSmoothed[yLabel] || chartData.smoothedToRaw[yLabel];
+    if (flip != null) {
+      buildDataset(dataName, flip, normalize(dataValue, xLabels, xLabel, flip), color, isMainDataset);
+    }
+
     return buildDataset(dataName, yLabel, normalize(dataValue, xLabels, xLabel, yLabel), color, isMainDataset);
   });
 }
@@ -335,7 +370,7 @@ function color(index) {
 function buildDataset(country, yLabel, data, color, isMainDataset) {
   let id = `${country}_${yLabel}`;
   if (datasetsById[id] != null) {
-    console.log(`Build dataset ${id}, duplicated`)
+    console.log(`************************* Build dataset ${id}, duplicated`)
   } else {
     //console.log(`Build dataset ${id}`)
   }
@@ -357,7 +392,8 @@ function normalize(data, xLabels, xLabel, yLabel) {
       o[point[xLabel]] = point[yLabel];
       return o;
       }, {});
-  return xLabels.map(date => lineData[date.format("YYYY-MM-DD")] || null);
+
+  return xLabels.map(date => lineData[date.format("YYYY-MM-DD")]);//FIXME why || null, to detect anomalies??
 }
 
 var chartsByName = {};
@@ -539,6 +575,29 @@ async function drawMap(mapDivId, originName, originPoint, onClickHandler, compar
   }).addTo(map);
   //map.setMaxBounds(map.getBounds());
   map.setMaxBounds([ [-90, -180],[90, 180] ]);
+
+  $.getJSON({ url:`/assets/js/all.110m.json`,
+    success: function(theData) {
+
+      theData.features.forEach(feature => {
+        function remarkCountry(show) {
+          return {stroke: false, fillColor: "green", fill: true, fillOpacity: show ? 0.3 : 0};
+        }
+        let geojson = L.geoJSON(feature.geometry, {style: function(layer) {
+          return remarkCountry(false);
+        } });
+
+        geojson.addTo(map);
+        geojson
+          .on('mouseover', function(e){
+              e.layer.setStyle(remarkCountry(true))
+          })
+          .on('mouseout', function(e){
+              e.layer.setStyle(remarkCountry(false))
+          });
+      });
+    }
+  });
 
   map.panTo(originPoint);
 
@@ -1070,7 +1129,7 @@ function _renderMiniTable(...selectedSources) {
   var lastPoints = selectedSources.map(name => chartData[name])
                            .map(sourceAllPoints => sourceAllPoints.slice(-1)[0]);
 
-  var columnSelection = ['date', 'new_cases_per_million', 'new_deads_per_million', 'total_cases_per_million', 'total_deads_per_million'];
+  var columnSelection = ['date', 'new_cases_per_million', 'total_cases_per_million', 'new_deads_per_million', 'total_deads_per_million'];
   var f = x => (typeof x == 'number') ? x.toLocaleString(chartData.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : (x || "");
   var data = columnSelection.map(column => [chartData.translations[column] || column, ...lastPoints.map(point => f(point[column]))])
   var columns = selectedSources.map(name => ({title: `<img width="16px" style="float: right;" src="${markerIcon(name)}">`}));
@@ -1412,11 +1471,11 @@ function createTable(containerId, buttonGroups, pageLength) {
   console.log("Rendering table")
   table = jQuery(`#${containerId}`).DataTable({
     dom: 'Bfrtip',
-    fnDrawCallback: async function(settings) {
+    fnDrawCallback: function(settings) {
       var isFirstDraw = table == null;
       if (isFirstDraw) return;//Init
 
-      setTimeout(() => receiveDatasetsToShow(tableCurrentPageLocalizableNames()), 0);
+      setTimeout(() => receiveDatasetsToShow(tableCurrentPageLocalizableNames(), table.button("smoothed:name").active()), 0);
     },
     paging: true,
     pagingType: "full_numbers",
@@ -1460,21 +1519,47 @@ function createTable(containerId, buttonGroups, pageLength) {
     if (!config.className.includes("colvisGroup")) {
       return
     }
-    dataTable.buttons("button.dt-button.buttons-colvisGroup").active(false)
+    dataTable.buttons("button.dt-button.buttons-colvisGroup").active(false);
+
+    if ([".covid19", ":hidden"].includes(config.show)) {
+      tableSmooth(table.button("smoothed:name").active());
+    }
     buttonApi.active(true);
   });
+
   console.log("Rendered table");
 }
 
 function addNewTableRow(rowObject) {
   if (table == null) {
-      console.log("***** SKIP TABLE is init")
+      console.log("Initialization. Skip...")
       return;
   }
   var tableIndexes = [...Array(table.columns().indexes().length).keys()];
   var tableColumnNames = tableIndexes.map(i => table.column(i).header().dataset.name);
   var row = tableColumnNames.map(name => rowObject[name] || null);
   table.row.add(row).draw();
+}
+
+function tableSmooth(smoothed) {
+  let smoothedColumns = [...Array(table.columns().indexes().length).keys()].map(i => table.column(i).header().dataset.name).filter(columnName => columnName.includes("_smoothed"))
+  let rawColumns = smoothedColumns.map(columnName => columnName.replace("_smoothed", ""));
+
+console.log("TABLE SMOOTH", smoothed)
+
+  let show = [];
+  let hide = [];
+  if (smoothed) {
+    show = smoothedColumns;
+    hide = rawColumns;
+  } else {
+    show = rawColumns;
+    hide = smoothedColumns;
+  }
+  show.forEach(column => table.column(`${column}:name`).visible(true));
+  hide.forEach(column => table.column(`${column}:name`).visible(false));
+
+  setTimeout(() => receiveDatasetsToShow(tableCurrentPageLocalizableNames(), smoothed), 0);
 }
 
 function tableCurrentPageLocalizableNames() {
