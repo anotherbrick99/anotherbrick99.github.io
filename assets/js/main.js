@@ -91,7 +91,6 @@ async function addDatasetToChart(chart, dataset) {
 
 var updateQueue = [];
 async function receiveDatasetsToShow(datasetLabels, smoothed) {
-console.log("receiveDatasetsToShow", datasetLabels, smoothed)
   updateQueue.push("");
   if (updateQueue.length > 1) {
     console.log(`Already updating, added update request. Queue size=${updateQueue.length}`);
@@ -113,9 +112,14 @@ console.log("receiveDatasetsToShow", datasetLabels, smoothed)
       let requiredYLabel = calcYLabel(chartData, chart.rawName, smoothed);
 
       if (chart.yLabel != requiredYLabel) {
-        console.log("**************", chart.yLabel, requiredYLabel);
         //force
         chart.yLabel = requiredYLabel;
+      }
+      const smoothedSuffix = " (smoothed)";
+      if (smoothed) {
+        chart.config.options.title.text += smoothedSuffix
+      } else {
+        chart.config.options.title.text = chart.config.options.title.text.replaceAll(smoothedSuffix, "");
       }
       filterDatasetsInChart(chart, datasetLabels.map(label => `${label}_${chart.yLabel}`));
       requestAnimationFrame(() => notify((i + 1)/charts.length * 100, `Loaded ${chart.yLabel}`), 0)
@@ -151,16 +155,11 @@ function filterDatasetsInChart(chart, datasetIds) {
   var currentIds = ids.toArray();
   var datasetIds = datasetIds.toArray();
 
-  console.log(datasetIds)
-  console.log(currentIds)
-  console.log("jhsadkjash")
   if (sameElements(currentIds, datasetIds)) {
     console.log(`  Chart ${chart.canvas.id}: No changes`);
     return;
   };
-  console.log("PASS")
   var currentDatasetNames = currentIds.map(id => datasetsById[id].label);
-
   var newDatasetNames = datasetIds.map(id => datasetsById[id].label);
   console.log(`  Current datasets: ${currentDatasetNames}(${currentDatasetNames.length})`);
   console.log(`  New datasets: ${newDatasetNames}(${newDatasetNames.length})`);
@@ -227,7 +226,7 @@ function plot(chartData, smoothed, name, datasetLabels, isDetailed) {
         onClick: x => {
           if (isDetailed) return;
 
-          let miniDatasets = chartsByName[`chart_${name}_mini`].config.data.datasets.map(x => x.label);
+          var miniDatasets = chartsByName[`chart_${name}_mini`].config.data.datasets.map(x => x.label);
           let miniSmooth = chartsByName[`chart_${name}_mini`].yLabel.includes("smoothed");
           plot(chartData, miniSmooth, name, miniDatasets, true);
           document.getElementById("chartModal").style.display = "block";
@@ -321,7 +320,8 @@ function plot(chartData, smoothed, name, datasetLabels, isDetailed) {
 }
 
 function calcYLabel(chartData, name, smoothed) {
-  return !smoothed ? name : (chartData.smoothedToRaw[name] || name);
+  const newYLabel = !smoothed ? name : (chartData.rawToSmoothed[name] || name);
+  return newYLabel;
 }
 
 function datasets(dataToRender, xLabels, xLabel, yLabel) {
@@ -370,7 +370,7 @@ function color(index) {
 function buildDataset(country, yLabel, data, color, isMainDataset) {
   let id = `${country}_${yLabel}`;
   if (datasetsById[id] != null) {
-    console.log(`************************* Build dataset ${id}, duplicated`)
+    console.log(`Build dataset ${id}, duplicated`)
   } else {
     //console.log(`Build dataset ${id}`)
   }
@@ -1515,18 +1515,6 @@ function createTable(containerId, buttonGroups, pageLength) {
     ]
   });
 
-  table.on( 'buttons-action.dt', function( e, buttonApi, dataTable, node, config ) {
-    if (!config.className.includes("colvisGroup")) {
-      return
-    }
-    dataTable.buttons("button.dt-button.buttons-colvisGroup").active(false);
-
-    if ([".covid19", ":hidden"].includes(config.show)) {
-      tableSmooth(table.button("smoothed:name").active());
-    }
-    buttonApi.active(true);
-  });
-
   console.log("Rendered table");
 }
 
@@ -1541,23 +1529,26 @@ function addNewTableRow(rowObject) {
   table.row.add(row).draw();
 }
 
-function tableSmooth(smoothed) {
-  let smoothedColumns = [...Array(table.columns().indexes().length).keys()].map(i => table.column(i).header().dataset.name).filter(columnName => columnName.includes("_smoothed"))
-  let rawColumns = smoothedColumns.map(columnName => columnName.replace("_smoothed", ""));
+function tableRefresh() {
+  const smoothed = table.button(".smoothed_button").active();
+  const activeAlternativeButtons = table.buttons(".alternative.active");
+  if (activeAlternativeButtons.length != 1) throw new Error("Unexpected active buttons");
 
-console.log("TABLE SMOOTH", smoothed)
+  const activeClass = activeAlternativeButtons[0].node.className.match("view_([^ ]+)")[1];
+  let allAlternatives = table.buttons(".alternative").map(x => x.node.className.match("view_([^ ]+)")[1]).toArray();
+  const nonActiveClasses = allAlternatives.filter(c => c != activeClass);
 
-  let show = [];
-  let hide = [];
-  if (smoothed) {
-    show = smoothedColumns;
-    hide = rawColumns;
-  } else {
-    show = rawColumns;
-    hide = smoothedColumns;
-  }
-  show.forEach(column => table.column(`${column}:name`).visible(true));
-  hide.forEach(column => table.column(`${column}:name`).visible(false));
+  //Show regular and smoothedmode columns
+  const smoothedMode = smoothed ? 'smoothed' : 'raw';
+  const showSelector = `.${activeClass}.regular,.${activeClass}.${smoothedMode}`;
+  table.columns(showSelector).visible(true);
+  //Hide nonsmoothedmode columns
+  const invertedModeHidden = smoothedMode == 'smoothed' ? 'raw' : 'smoothed';
+  table.columns(`.${activeClass}.${invertedModeHidden}`).visible(false);
+
+  //Hide non active classes
+  const hideSelector = nonActiveClasses.map(c => `.${c}`).join(",");
+  table.columns(hideSelector).visible(false);
 
   setTimeout(() => receiveDatasetsToShow(tableCurrentPageLocalizableNames(), smoothed), 0);
 }
