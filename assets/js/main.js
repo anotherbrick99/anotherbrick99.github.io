@@ -1465,7 +1465,7 @@ function addArcButton(destinationCountry, iconUrl, closeable, position) {
 
 //
 var table = null;
-function createTable(containerId, buttonGroups, pageLength) {
+function createTable(containerId, rows, buttonGroups, pageLength) {
   var pageLengths = [5, 10, 15, 20];
 
   console.log("Rendering table")
@@ -1514,6 +1514,7 @@ function createTable(containerId, buttonGroups, pageLength) {
       },
     ]
   });
+  rows.forEach(addNewTableRow)
 
   console.log("Rendered table");
 }
@@ -1524,8 +1525,9 @@ function addNewTableRow(rowObject) {
       return;
   }
   var tableIndexes = [...Array(table.columns().indexes().length).keys()];
+  var format = new Intl.NumberFormat(chartData["locale"], { minimumFractionDigits:2, maximumFractionDigits: 2 })
   var tableColumnNames = tableIndexes.map(i => table.column(i).header().dataset.name);
-  var row = tableColumnNames.map(name => rowObject[name] || null);
+  var row = tableColumnNames.map(name => rowObject[name] || null).map(x => typeof(x) == "number" ? format.format(x): x);
   table.row.add(row).draw();
 }
 
